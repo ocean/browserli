@@ -1,0 +1,29 @@
+{
+  "name": "browserli",
+  "version": "0.1.0",
+  "description": "🥦 Browser automation for Google Maps data importing via Cloudflare Workers",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "wrangler build",
+    "lint": "eslint src --ext .ts",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "playwright",
+    "browser-automation",
+    "google-maps"
+  ],
+  "dependencies": {
+    "@cloudflare/playwright": "^1.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250203.0",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.63.0"
+  }
+}
