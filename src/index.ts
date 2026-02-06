@@ -389,14 +389,36 @@ async function handleDataImport(
 
     if (body.sessionId) {
       console.log(`[DataImport] Reusing session: ${body.sessionId}`);
-      browser = await connect(env.BROWSER, body.sessionId);
-      sessionId = body.sessionId;
+      try {
+        browser = await connect(env.BROWSER, body.sessionId);
+        sessionId = body.sessionId;
+        console.log(`[DataImport] Successfully reused session`);
+      } catch (connectError) {
+        const msg = connectError instanceof Error ? connectError.message : String(connectError);
+        console.error(`[DataImport] Failed to reuse session: ${msg}`);
+        console.log(`[DataImport] Session may have expired, creating new one`);
+        const session = await acquire(env.BROWSER);
+        sessionId = session.sessionId;
+        console.log(`[DataImport] New session ID: ${sessionId}`);
+        browser = await connect(env.BROWSER, sessionId);
+      }
     } else {
       console.log('[DataImport] Creating new browser session');
-      const session = await acquire(env.BROWSER);
-      sessionId = session.sessionId;
-      console.log(`[DataImport] New session ID: ${sessionId}`);
-      browser = await connect(env.BROWSER, sessionId);
+      try {
+        const session = await acquire(env.BROWSER);
+        sessionId = session.sessionId;
+        console.log(`[DataImport] New session ID: ${sessionId}`);
+        browser = await connect(env.BROWSER, sessionId);
+      } catch (acquireError) {
+        const msg = acquireError instanceof Error ? acquireError.message : String(acquireError);
+        console.error(`[DataImport] Browser acquisition failed: ${msg}`);
+        // Check if this is a rate limit error
+        if (msg.includes('429') || msg.includes('Rate limit')) {
+          console.error('[DataImport] RATE LIMIT DETECTED - This is from Cloudflare Browser Rendering API');
+          throw new Error(`Browser service rate limited. Please wait before retrying. Error: ${msg}`);
+        }
+        throw acquireError;
+      }
     }
 
     const page = await browser.newPage();
@@ -515,12 +537,24 @@ async function handleDataImport(
       error instanceof Error ? error.message : String(error);
     console.error("[Worker] Data import error:", errorMessage);
 
+    const isRateLimit = errorMessage.includes('429') || errorMessage.includes('Rate limit') || errorMessage.includes('rate limited');
+    const statusCode = isRateLimit ? 429 : 500;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (isRateLimit) {
+      headers["Retry-After"] = "120"; // Suggest 2 minute retry
+      console.error("[Worker] CLOUDFLARE BROWSER RENDERING RATE LIMITED - Check browserli logs for details");
+    }
+
     return new Response(
       JSON.stringify({
         success: false,
         error: errorMessage,
+        isRateLimit,
       }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      { status: statusCode, headers },
     );
   }
 }
