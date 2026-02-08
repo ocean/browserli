@@ -17,7 +17,7 @@ Browser automation for Google Maps data import via Cloudflare Workers and Playwr
 
 - [Node.js](https://nodejs.org/) (v18+)
 - [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/)
-- Cloudflare account
+- Cloudflare account (for production deployment)
 
 ### Setup
 
@@ -25,13 +25,31 @@ Browser automation for Google Maps data import via Cloudflare Workers and Playwr
 npm install
 ```
 
-### Local Development
+### Local Development (Recommended)
 
+Avoid Cloudflare rate limits by running Playwright server locally:
+
+**Terminal 1: Start Playwright Server**
 ```bash
-npm run dev
+npm run playwright:server
+# Output: 📡 WebSocket endpoint: ws://localhost:3000
 ```
 
-The worker will be available at `http://localhost:8787`
+**Terminal 2: Start Wrangler Dev**
+```bash
+npm run dev
+# Worker available at: http://localhost:8787
+```
+
+See [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) for full setup guide.
+
+### Quick Start (Both at once)
+
+```bash
+npm run dev:full
+```
+
+This starts both the Playwright server and Wrangler dev in one command.
 
 ### Deploy to Cloudflare
 
