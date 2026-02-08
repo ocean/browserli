@@ -1,8 +1,18 @@
-import { launch, connect, acquire } from "@cloudflare/playwright";
+import { connect } from "@cloudflare/playwright";
+import {
+  acquirePooledSession,
+  releasePooledSession,
+  removePooledSession,
+  listPooledSessions,
+  MAX_CONCURRENT_SESSIONS,
+} from "./session-pool";
 
 interface Env {
   BROWSER: any;
   API_KEYS: string;
+  BROWSER_SESSIONS: KVNamespace;
+  USE_LOCAL_PLAYWRIGHT?: string;
+  PLAYWRIGHT_SERVER_URL?: string;
 }
 
 interface DataImportRequest {
@@ -383,41 +393,155 @@ async function handleDataImport(
       );
     }
 
-    // Use session reuse if sessionId provided, otherwise start new session
+    // Use session reuse if sessionId provided, otherwise start new session.
     let browser: any;
     let sessionId: string;
+    let usingPool = false; // Track whether we acquired via the KV pool.
 
-    if (body.sessionId) {
-      console.log(`[DataImport] Reusing session: ${body.sessionId}`);
+    // Determine if we should use local Playwright.
+    const useLocalPlaywright = env.USE_LOCAL_PLAYWRIGHT === "1";
+    console.log(`[DataImport] useLocalPlaywright=${useLocalPlaywright}, env.USE_LOCAL_PLAYWRIGHT=${env.USE_LOCAL_PLAYWRIGHT}`);
+    
+    if (useLocalPlaywright) {
+      console.log('[DataImport] Entering local Playwright code path');
+      // Local development: connect to local Playwright server
+      // Read endpoint file on each request so changes are picked up without restart
+      let playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL;
+      
+      // Try to read from endpoint file first (auto-discovery)
       try {
-        browser = await connect(env.BROWSER, body.sessionId);
-        sessionId = body.sessionId;
-        console.log(`[DataImport] Successfully reused session`);
-      } catch (connectError) {
-        const msg = connectError instanceof Error ? connectError.message : String(connectError);
-        console.error(`[DataImport] Failed to reuse session: ${msg}`);
-        console.log(`[DataImport] Session may have expired, creating new one`);
-        const session = await acquire(env.BROWSER);
-        sessionId = session.sessionId;
-        console.log(`[DataImport] New session ID: ${sessionId}`);
-        browser = await connect(env.BROWSER, sessionId);
+        // This will fail in Cloudflare workers (no file access), but works in local Wrangler dev
+        // We use a dynamic import to avoid breaking production builds
+        console.log('[DataImport] Attempting to read .playwright-endpoint.json for auto-discovery');
+        const { readFileSync } = await import('fs');
+        const { join } = await import('path');
+        try {
+          // Try multiple potential paths for the endpoint file
+          const possiblePaths = [
+            '.playwright-endpoint.json',  // Current working directory
+            join(process.cwd(), '.playwright-endpoint.json'),
+            '/Users/drew/code/browserli/.playwright-endpoint.json',  // Absolute path for local dev
+          ];
+          
+          let endpointData = null;
+          for (const filePath of possiblePaths) {
+            try {
+              const data = readFileSync(filePath, 'utf-8');
+              endpointData = JSON.parse(data);
+              console.log(`[DataImport] Found endpoint file at: ${filePath}`);
+              break;
+            } catch (_) {
+              // Try next path
+            }
+          }
+          
+          if (endpointData) {
+            playwrightServerUrl = endpointData.url;
+            console.log(`[DataImport] Auto-discovered Playwright endpoint: ${playwrightServerUrl}`);
+          } else {
+            console.log('[DataImport] Endpoint file not found at any expected location');
+          }
+        } catch (readError) {
+          console.log(`[DataImport] Error reading endpoint file: ${readError}`);
+        }
+      } catch (e) {
+        console.log('[DataImport] File system unavailable, using ENV variable if set');
+      }
+
+      if (!playwrightServerUrl) {
+        throw new Error(
+          'Local Playwright server URL not found. Set PLAYWRIGHT_SERVER_URL in .env.local or start the server with: npm run playwright:server'
+        );
+      }
+
+      console.log(`[DataImport] Connecting to local Playwright server: ${playwrightServerUrl}`);
+      
+      try {
+        // Dynamic import to avoid issues in production
+        const { chromium } = await import('playwright');
+        browser = await chromium.connect(playwrightServerUrl);
+        // For local Playwright, we don't get session IDs back, so generate one
+        sessionId = `local-${Date.now()}`;
+        console.log(`[DataImport] Connected to local Playwright server (pseudo-session: ${sessionId})`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[DataImport] Failed to connect to local Playwright: ${msg}`);
+        throw new Error(
+          `Cannot connect to local Playwright server at ${playwrightServerUrl}. ` +
+          `Make sure it's running: npm run playwright:server`
+        );
       }
     } else {
-      console.log('[DataImport] Creating new browser session');
+      // Production: use Cloudflare Browser Rendering API with session pool.
+      const poolResult = await acquirePooledSession(
+        env.BROWSER_SESSIONS,
+        env.BROWSER,
+        body.sessionId,
+        body.url,
+      );
+
+      if (!poolResult) {
+        // All browser sessions are currently in use.
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "All browser sessions are currently busy. Please retry shortly.",
+            poolFull: true,
+          }),
+          {
+            status: 503,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": "30",
+            },
+          },
+        );
+      }
+
+      sessionId = poolResult.sessionId;
+      usingPool = true;
+
       try {
-        const session = await acquire(env.BROWSER);
-        sessionId = session.sessionId;
-        console.log(`[DataImport] New session ID: ${sessionId}`);
         browser = await connect(env.BROWSER, sessionId);
-      } catch (acquireError) {
-        const msg = acquireError instanceof Error ? acquireError.message : String(acquireError);
-        console.error(`[DataImport] Browser acquisition failed: ${msg}`);
-        // Check if this is a rate limit error
-        if (msg.includes('429') || msg.includes('Rate limit')) {
-          console.error('[DataImport] RATE LIMIT DETECTED - This is from Cloudflare Browser Rendering API');
-          throw new Error(`Browser service rate limited. Please wait before retrying. Error: ${msg}`);
+        console.log(
+          `[DataImport] Connected to session ${sessionId} (reused: ${poolResult.reused})`,
+        );
+      } catch (connectError) {
+        const msg = connectError instanceof Error ? connectError.message : String(connectError);
+        console.error(`[DataImport] Failed to connect to session ${sessionId}: ${msg}`);
+
+        // Session is dead in CF but still tracked in KV — clean it up.
+        await removePooledSession(env.BROWSER_SESSIONS, sessionId);
+
+        // Retry once with a fresh session.
+        console.log(`[DataImport] Retrying with a fresh session`);
+        const retryResult = await acquirePooledSession(
+          env.BROWSER_SESSIONS,
+          env.BROWSER,
+          undefined,
+          body.url,
+        );
+
+        if (!retryResult) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "All browser sessions are currently busy. Please retry shortly.",
+              poolFull: true,
+            }),
+            {
+              status: 503,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "30",
+              },
+            },
+          );
         }
-        throw acquireError;
+
+        sessionId = retryResult.sessionId;
+        browser = await connect(env.BROWSER, sessionId);
+        console.log(`[DataImport] Connected to retry session ${sessionId}`);
       }
     }
 
@@ -478,8 +602,12 @@ async function handleDataImport(
       }
 
       await page.close();
-      // Don't close browser - just disconnect so session can be reused
-      // The session stays alive for ~10 minutes on the Browserli service
+      // Don't close browser — just disconnect so session can be reused.
+
+      // Release session back to pool so other requests can use it.
+      if (usingPool) {
+        await releasePooledSession(env.BROWSER_SESSIONS, sessionId);
+      }
 
       const duration = (Date.now() - startTime) / 1000;
       const startIndex = pageNum * ITEMS_PER_PAGE + 1;
@@ -510,7 +638,12 @@ async function handleDataImport(
       console.error(`[DataImport] Error during extraction: ${errorMessage}`);
 
       await page.close();
-      // Don't close browser - session should remain available for retry
+      // Don't close browser — session should remain available for retry.
+
+      // Release session back to pool even on error.
+      if (usingPool) {
+        await releasePooledSession(env.BROWSER_SESSIONS, sessionId);
+      }
 
       const duration = (Date.now() - startTime) / 1000;
 
@@ -618,10 +751,27 @@ export default {
       return response;
     }
 
+    // Session pool debug endpoint.
+    if (url.pathname === "/sessions" && request.method === "GET") {
+      const sessions = await listPooledSessions(env.BROWSER_SESSIONS);
+      const body = {
+        sessions,
+        capacity: {
+          used: sessions.length,
+          max: MAX_CONCURRENT_SESSIONS,
+          available: MAX_CONCURRENT_SESSIONS - sessions.length,
+        },
+      };
+      return new Response(JSON.stringify(body, null, 2), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+
     return new Response(
       JSON.stringify({
         error: "Not found",
-        available: ["/data-import"],
+        available: ["/data-import", "/sessions"],
       }),
       {
         status: 404,
