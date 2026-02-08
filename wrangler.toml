@@ -6,6 +6,15 @@ compatibility_flags = ["nodejs_compat"]
 [browser]
 binding = "BROWSER"
 
+# Session pool KV namespace.
+# Create with: wrangler kv namespace create BROWSER_SESSIONS
+#              wrangler kv namespace create BROWSER_SESSIONS --preview
+# Then replace the IDs below with the output values.
+[[kv_namespaces]]
+binding = "BROWSER_SESSIONS"
+id = "796d36c15db048bb8175e416b4bf0bdd"
+preview_id = "dee9fcdcc6624e169f7e3421ae8539ed"
+
 [[routes]]
 pattern = "browserli.drewr.dev"
 custom_domain = true
