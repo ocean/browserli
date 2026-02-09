@@ -409,49 +409,52 @@ async function handleDataImport(
       let playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL;
       
       // Try to read from endpoint file first (auto-discovery)
-      try {
-        // This will fail in Cloudflare workers (no file access), but works in local Wrangler dev
-        // We use a dynamic import to avoid breaking production builds
-        console.log('[DataImport] Attempting to read .playwright-endpoint.json for auto-discovery');
-        const { readFileSync } = await import('fs');
-        const { join } = await import('path');
+      // Note: File system access only works in local Wrangler dev, not in Cloudflare Workers
+      if (typeof globalThis !== 'undefined' && 'process' in globalThis) {
         try {
-          // Try multiple potential paths for the endpoint file
-          const possiblePaths = [
-            '.playwright-endpoint.json',  // Current working directory
-            join(process.cwd(), '.playwright-endpoint.json'),
-            '/Users/drew/code/browserli/.playwright-endpoint.json',  // Absolute path for local dev
-          ];
-          
-          let endpointData = null;
-          for (const filePath of possiblePaths) {
-            try {
-              const data = readFileSync(filePath, 'utf-8');
-              endpointData = JSON.parse(data);
-              console.log(`[DataImport] Found endpoint file at: ${filePath}`);
-              break;
-            } catch (_) {
-              // Try next path
+          console.log('[DataImport] Attempting to read .playwright-endpoint.json for auto-discovery');
+          const { readFileSync } = await import('fs');
+          const { join } = await import('path');
+          try {
+            // Try multiple potential paths for the endpoint file
+            const possiblePaths = [
+              '.playwright-endpoint.json',
+              join(process.cwd(), '.playwright-endpoint.json'),
+              '/Users/drew/code/browserli/.playwright-endpoint.json',
+            ];
+            
+            let endpointData = null;
+            for (const filePath of possiblePaths) {
+              try {
+                const data = readFileSync(filePath, 'utf-8');
+                endpointData = JSON.parse(data);
+                console.log(`[DataImport] Found endpoint file at: ${filePath}`);
+                break;
+              } catch (_) {
+                // Try next path
+              }
             }
+            
+            if (endpointData) {
+              playwrightServerUrl = endpointData.url;
+              console.log(`[DataImport] Auto-discovered Playwright endpoint: ${playwrightServerUrl}`);
+            } else {
+              console.log('[DataImport] Endpoint file not found at any expected location');
+            }
+          } catch (readError) {
+            console.log(`[DataImport] Error reading endpoint file: ${readError}`);
           }
-          
-          if (endpointData) {
-            playwrightServerUrl = endpointData.url;
-            console.log(`[DataImport] Auto-discovered Playwright endpoint: ${playwrightServerUrl}`);
-          } else {
-            console.log('[DataImport] Endpoint file not found at any expected location');
-          }
-        } catch (readError) {
-          console.log(`[DataImport] Error reading endpoint file: ${readError}`);
+        } catch (e) {
+          console.log('[DataImport] File system unavailable, using ENV variable if set');
         }
-      } catch (e) {
-        console.log('[DataImport] File system unavailable, using ENV variable if set');
+      } else {
+        console.log('[DataImport] Running in Cloudflare Workers environment, skipping file auto-discovery');
       }
 
       if (!playwrightServerUrl) {
-        throw new Error(
-          'Local Playwright server URL not found. Set PLAYWRIGHT_SERVER_URL in .env.local or start the server with: npm run playwright:server'
-        );
+        // Fallback to default local Playwright server address
+        playwrightServerUrl = 'ws://127.0.0.1:3000';
+        console.log(`[DataImport] No PLAYWRIGHT_SERVER_URL found, using default: ${playwrightServerUrl}`);
       }
 
       console.log(`[DataImport] Connecting to local Playwright server: ${playwrightServerUrl}`);
