@@ -406,7 +406,8 @@ async function handleDataImport(
       console.log('[DataImport] Entering local Playwright code path');
       // Local development: use HTTP proxy to local Playwright server
       // This avoids any Node.js module imports in the Worker context
-      const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL || 'http://localhost:3000';
+      // Default to HTTP API server on port 3001 (not the WebSocket port 3000)
+      const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL || 'http://localhost:3001';
 
       console.log(`[DataImport] Connecting to local Playwright server: ${playwrightServerUrl}`);
       

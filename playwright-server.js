@@ -44,10 +44,11 @@ async function startServer() {
     
     console.log('');
     console.log('✅ Playwright server started');
-    console.log(`📡 WebSocket endpoint: ${wsEndpoint}`);
+    console.log(`📡 CDP WebSocket endpoint: ${wsEndpoint}`);
+    console.log(`📡 HTTP API endpoint: http://localhost:${HTTP_PORT}`);
     console.log('');
     console.log('⚠️  Update .env.local with:');
-    console.log(`PLAYWRIGHT_SERVER_URL=${wsEndpoint}`);
+    console.log(`PLAYWRIGHT_SERVER_URL=http://localhost:${HTTP_PORT}`);
     console.log('');
     console.log('Then restart wrangler dev:');
     console.log('npm run wrangler:dev');
