@@ -13,7 +13,8 @@
  */
 
 import { chromium } from 'playwright';
-import { writeFileSync, execSync } from 'fs';
+import { writeFileSync } from 'fs';
+import { execSync } from 'child_process';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 
