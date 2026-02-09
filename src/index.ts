@@ -414,40 +414,52 @@ async function handleDataImport(
       try {
         // Create a simple HTTP-based browser proxy that uses fetch
         // This works in Worker environments without any Node.js dependencies
+        // For local Playwright, generate a sessionId upfront
+        sessionId = `local-${Date.now()}`;
+        
         browser = {
           _playwrightServerUrl: playwrightServerUrl,
+          _sessionId: sessionId,
           async newPage() {
             // Delegate to the HTTP API on the local server
             return {
               _serverUrl: playwrightServerUrl,
+              _sessionId: sessionId,
               async goto(url: string, options: any) {
                 const response = await fetch(`${playwrightServerUrl}/api/page/goto`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ url, options }),
+                  body: JSON.stringify({ url, options, sessionId }),
                 });
                 if (!response.ok) {
                   throw new Error(`Failed to navigate to ${url}`);
                 }
-                return response.json();
+                const data = await response.json();
+                return data;
               },
               async evaluate(fn: Function) {
                 const response = await fetch(`${playwrightServerUrl}/api/page/evaluate`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ script: fn.toString() }),
+                  body: JSON.stringify({ script: fn.toString(), sessionId }),
                 });
                 if (!response.ok) {
-                  throw new Error(`Failed to evaluate script`);
+                  const error = await response.json();
+                  throw new Error(`Failed to evaluate script: ${error.error}`);
                 }
-                return response.json();
+                const data = await response.json();
+                return data.result;
               },
               async waitForTimeout(ms: number) {
                 return new Promise(resolve => setTimeout(resolve, ms));
               },
               async close() {
                 // Close page via HTTP
-                await fetch(`${playwrightServerUrl}/api/page/close`, { method: 'POST' });
+                await fetch(`${playwrightServerUrl}/api/page/close`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sessionId }),
+                });
               },
               async setDefaultTimeout() {},
               async setDefaultNavigationTimeout() {},
@@ -457,9 +469,6 @@ async function handleDataImport(
             // Close browser
           },
         };
-        
-        // For local Playwright, we don't get session IDs back, so generate one
-        sessionId = `local-${Date.now()}`;
         console.log(`[DataImport] Connected to local Playwright server (HTTP proxy: ${sessionId})`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);

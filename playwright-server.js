@@ -108,29 +108,42 @@ function startHttpApiServer(playwrightServer) {
             const browser = await chromium.connect(playwrightServer.wsEndpoint());
             const context = await browser.newContext();
             const page = await context.newPage();
-            activeSessions.set(sessionId, { browser, context, page });
+            activeSessions.set(sessionId, { browser, context, page, createdAt: Date.now() });
           }
 
           const { page } = activeSessions.get(sessionId);
+          console.log(`[HTTP API] goto: ${data.url}`);
           await page.goto(data.url, data.options || {});
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: true, sessionId }));
         } else if (pathname === '/api/page/evaluate') {
-          const sessionId = data.sessionId || `session-${Date.now()}`;
+          const sessionId = data.sessionId;
           
-          if (!activeSessions.has(sessionId)) {
-            const browser = await chromium.connect(playwrightServer.wsEndpoint());
-            const context = await browser.newContext();
-            const page = await context.newPage();
-            activeSessions.set(sessionId, { browser, context, page });
+          if (!sessionId || !activeSessions.has(sessionId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid or missing sessionId' }));
+            return;
           }
 
           const { page } = activeSessions.get(sessionId);
-          const result = await page.evaluate(eval(`(${data.script})`));
+          
+          try {
+            // The script is already a function body as a string
+            // We need to wrap it and execute it
+            const result = await page.evaluate((scriptStr) => {
+              // eslint-disable-next-line no-eval
+              return eval(`(${scriptStr})()`);
+            }, data.script);
 
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ result, sessionId }));
+            console.log(`[HTTP API] evaluate returned ${Array.isArray(result) ? result.length : typeof result} items`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ result, sessionId }));
+          } catch (evalError) {
+            console.error(`[HTTP API] evaluate error:`, evalError.message);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: evalError.message }));
+          }
         } else if (pathname === '/api/page/close') {
           const sessionId = data.sessionId;
           if (sessionId && activeSessions.has(sessionId)) {
