@@ -2,107 +2,148 @@
 
 This guide explains how to use a local Playwright server for development instead of the Cloudflare Browser Rendering API.
 
-## Problem Solved
+## Architecture
 
-The previous implementation tried to use filesystem access (`fs.readFileSync`) from within the Wrangler Worker, which doesn't have filesystem access. This caused the error:
+The browserli Worker environment cannot import Node.js modules (they get bundled and fail with `__dirname` errors). Instead, we use an HTTP API proxy approach:
+
 ```
-__dirname is not defined
-Cannot connect to local Playwright server at ws://localhost:59012/...
+┌─────────────────────┐
+│  Wrangler Worker    │
+│  (Browser context)  │
+└──────────┬──────────┘
+           │ fetch()
+           ▼
+┌─────────────────────────────────────────┐
+│  Local Playwright Server (Node.js)      │
+│  ┌──────────────────┐ ┌──────────────┐  │
+│  │ Port 3000: CDP   │ │ Port 3001:   │  │
+│  │ WebSocket        │ │ HTTP API     │  │
+│  │ (Playwright      │ │ (for Worker) │  │
+│  │  native)         │ │              │  │
+│  └──────────────────┘ └──────────────┘  │
+└─────────────────────────────────────────┘
+           │
+           ▼
+    ┌─────────────────┐
+    │ Chromium/Browser│
+    └─────────────────┘
 ```
 
-## How It Works Now
+## Setup
 
-1. **Playwright Server** (`playwright-server.js`) - Runs as a standalone Node process
-   - Starts a Playwright server on a dynamic port
-   - Writes the endpoint to `.playwright-endpoint.json` (for reference)
-   - **Automatically updates `.env.local` with the endpoint URL** via `update-env.js`
-
-2. **Wrangler Worker** (runs in Cloudflare Workers environment)
-   - Reads `PLAYWRIGHT_SERVER_URL` from environment variables (passed via `.env.local`)
-   - No filesystem access needed
-   - Can now properly connect to the local server
-
-## Setup Steps
-
-### 1. Start the Local Playwright Server
+### 1. Start the Playwright Server
 
 ```bash
 npm run playwright:server
 ```
 
-You'll see output like:
+Output:
 ```
 ✅ Playwright server started
-📡 WebSocket endpoint: ws://localhost:63885/dafcefb27ee882c157f0edb564345bcf
-📝 Endpoint file: /Users/drew/code/browserli/.playwright-endpoint.json
+📡 CDP WebSocket endpoint: ws://localhost:3000/84dfdcdb437ce2770a4a07e72e2a3cf8
+📡 HTTP API endpoint: http://localhost:3001
 
-✅ Updated .env.local
-📝 PLAYWRIGHT_SERVER_URL=ws://localhost:63885/dafcefb27ee882c157f0edb564345bcf
+⚠️  Update .env.local with:
+PLAYWRIGHT_SERVER_URL=http://localhost:3001
 
-⚠️  Restart wrangler dev for the change to take effect:
-   npm run wrangler:dev
+Then restart wrangler dev:
+npm run wrangler:dev
 ```
 
-### 2. The script automatically updates `.env.local`
+### 2. Update `.env.local`
 
-No manual action needed! The `update-env.js` helper script is called automatically when the server starts and updates your `.env.local` with the correct endpoint.
+Copy the HTTP API endpoint into `.env.local`:
+```
+PLAYWRIGHT_SERVER_URL=http://localhost:3001
+```
 
-### 3. Start Wrangler Dev (in a new terminal)
+### 3. Start Wrangler Dev (in another terminal)
 
 ```bash
 npm run wrangler:dev
 ```
 
-The Worker will now connect to your local Playwright server using the `PLAYWRIGHT_SERVER_URL` from `.env.local`.
+The Worker will now use the HTTP API proxy to control Playwright.
 
-## Files Modified
+### 4. Combined Development (Optional)
 
-- **`playwright-server.js`** - Now calls `update-env.js` to auto-update `.env.local`
-- **`src/index.ts`** - Removed filesystem-based endpoint file reading
-- **`update-env.js`** - New helper script that safely updates `.env.local`
+Use the combined script to start both at once:
+```bash
+npm run dev:full
+```
+
+This starts:
+- Playwright server (port 3000 CDP, 3001 HTTP API)
+- Wrangler dev (port 8787)
+
+## How It Works
+
+1. **Playwright Server** (`playwright-server.js`)
+   - Starts a CDP server on port 3000
+   - Starts an HTTP API proxy on port 3001
+   - Provides REST endpoints for Worker to call
+
+2. **Worker** (`src/index.ts`)
+   - Uses `fetch()` to call HTTP endpoints (no Node.js imports!)
+   - Calls `http://localhost:3001/api/page/goto`
+   - Calls `http://localhost:3001/api/page/evaluate`
+   - Calls `http://localhost:3001/api/page/close`
+
+3. **HTTP API Server** (`playwright-server.js`)
+   - Manages browser sessions
+   - Executes Playwright operations
+   - Returns results via JSON
+
+## API Endpoints
+
+- `POST /api/page/goto` - Navigate to a URL
+  ```json
+  { "url": "...", "options": {}, "sessionId": "..." }
+  ```
+
+- `POST /api/page/evaluate` - Run JavaScript in the page
+  ```json
+  { "script": "function() { ... }", "sessionId": "..." }
+  ```
+
+- `POST /api/page/close` - Close the page
+  ```json
+  { "sessionId": "..." }
+  ```
 
 ## Troubleshooting
 
-### Server starts but wrangler still can't connect
+### Port 3000 or 3001 already in use
 
-1. Make sure you **restarted `wrangler dev`** after the server started
-2. Verify `.env.local` was updated:
+```bash
+# Find what's using the port
+lsof -i :3000
+lsof -i :3001
+
+# Kill the process
+kill -9 <PID>
+```
+
+### Worker can't connect to HTTP API
+
+1. Verify the Playwright server is running:
+   ```bash
+   curl http://localhost:3001/
+   ```
+
+2. Check `.env.local` has the correct URL:
    ```bash
    grep PLAYWRIGHT_SERVER_URL .env.local
    ```
-3. Check the endpoint is actually running:
-   ```bash
-   curl -I ws://localhost:XXXX/... 
-   ```
 
-### "Cannot connect to local Playwright server" error
-
-1. Make sure the Playwright server is still running:
-   ```bash
-   npm run playwright:server
-   ```
-2. Check the endpoint URL in `.env.local` matches what the server printed
 3. Restart `wrangler dev` after updating `.env.local`
 
-### update-env.js fails
+### Places not being extracted
 
-If the helper script fails to update `.env.local`, you can manually add:
-```
-PLAYWRIGHT_SERVER_URL=ws://localhost:YOUR_PORT/YOUR_TOKEN
-```
-to `.env.local` and restart `wrangler dev`.
-
-## Manual Update (if needed)
-
-If you prefer to update `.env.local` manually:
-
-```bash
-# Run the server
-npm run playwright:server
-
-# In another terminal, manually update .env.local
-echo "PLAYWRIGHT_SERVER_URL=ws://localhost:63885/dafcefb27ee882c157f0edb564345bcf" >> .env.local
-
-# Restart wrangler
-npm run wrangler:dev
-```
+1. Check the console logs for errors
+2. Verify the page selector selectors haven't changed:
+   ```bash
+   # Look for this in the logs:
+   [HTTP API] evaluate returned 200 items
+   ```
+3. Test the extraction directly on the Google Maps collection page
