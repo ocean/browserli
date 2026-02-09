@@ -3,29 +3,27 @@
 /**
  * Local Playwright Server
  * 
- * Starts a Playwright server for local development.
- * Writes the WebSocket endpoint to .playwright-endpoint.json
- * so that both Browserli and Placemake can auto-discover it.
+ * Starts a Playwright server on a fixed port (3000) for local development.
  * 
  * Usage: node playwright-server.js
  * 
- * Creates: .playwright-endpoint.json with the actual WebSocket URL
+ * The WebSocket endpoint will be: ws://localhost:3000/[token]
+ * Update .env.local with: PLAYWRIGHT_SERVER_URL=ws://localhost:3000/[token]
  */
 
 import { chromium } from 'playwright';
-import { writeFileSync } from 'fs';
-import { execSync } from 'child_process';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ENDPOINT_FILE = `${__dirname}/.playwright-endpoint.json`;
+const FIXED_PORT = 3000;
 
 async function startServer() {
   console.log('🎭 Starting Playwright server...');
   
   try {
     const server = await chromium.launchServer({
+      port: FIXED_PORT,
       headless: true,
       args: [
         '--disable-blink-features=AutomationControlled',
@@ -35,29 +33,15 @@ async function startServer() {
 
     const wsEndpoint = server.wsEndpoint();
     
-    // Write endpoint to file for auto-discovery
-    const endpointData = {
-      url: wsEndpoint,
-      timestamp: new Date().toISOString(),
-      pid: process.pid,
-    };
-    writeFileSync(ENDPOINT_FILE, JSON.stringify(endpointData, null, 2));
-    
     console.log('');
     console.log('✅ Playwright server started');
     console.log(`📡 WebSocket endpoint: ${wsEndpoint}`);
-    console.log(`📝 Endpoint file: ${ENDPOINT_FILE}`);
     console.log('');
-    
-    // Update .env.local with the endpoint
-    try {
-      execSync(`node update-env.js "${wsEndpoint}"`, { cwd: __dirname, stdio: 'inherit' });
-    } catch (error) {
-      console.error('⚠️  Failed to update .env.local automatically');
-      console.error('Please manually update .env.local with:');
-      console.error(`PLAYWRIGHT_SERVER_URL=${wsEndpoint}`);
-    }
-    
+    console.log('⚠️  Update .env.local with:');
+    console.log(`PLAYWRIGHT_SERVER_URL=${wsEndpoint}`);
+    console.log('');
+    console.log('Then restart wrangler dev:');
+    console.log('npm run wrangler:dev');
     console.log('');
     console.log('Press Ctrl+C to stop the server');
     console.log('');
@@ -66,13 +50,6 @@ async function startServer() {
     const cleanup = async () => {
       console.log('\n');
       console.log('🛑 Shutting down Playwright server...');
-      try {
-        // Remove endpoint file
-        const fs = await import('fs');
-        fs.unlinkSync(ENDPOINT_FILE);
-      } catch (e) {
-        // File might already be deleted
-      }
       await server.close();
       process.exit(0);
     };

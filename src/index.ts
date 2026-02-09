@@ -405,15 +405,8 @@ async function handleDataImport(
     if (useLocalPlaywright) {
       console.log('[DataImport] Entering local Playwright code path');
       // Local development: connect to local Playwright server
-      const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL;
-
-      if (!playwrightServerUrl) {
-        throw new Error(
-          'Local Playwright server URL not configured. ' +
-          'Start the Playwright server with: npm run playwright:server ' +
-          'Then update .env.local with the PLAYWRIGHT_SERVER_URL from the server output.'
-        );
-      }
+      // Default to localhost:3000 if not configured, fallback to env var
+      const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL || 'ws://localhost:3000';
 
       console.log(`[DataImport] Connecting to local Playwright server: ${playwrightServerUrl}`);
       
