@@ -144,6 +144,138 @@ function startHttpApiServer(playwrightServer) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: evalError.message }));
           }
+        } else if (pathname === '/api/place-details') {
+          const sessionId = data.sessionId;
+          const placeUrl = data.url;
+
+          if (!sessionId || !activeSessions.has(sessionId)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid or missing sessionId' }));
+            return;
+          }
+
+          if (!placeUrl) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing url parameter' }));
+            return;
+          }
+
+          const { page } = activeSessions.get(sessionId);
+
+          try {
+            console.log(`[HTTP API] place-details: ${placeUrl}`);
+            await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+            // Wait for place panel to load
+            await page.waitForSelector('h1', { timeout: 10000 });
+
+            const details = await page.evaluate(() => {
+              const url = window.location.href;
+
+              // Extract coordinates from URL pattern @lat,lng,zoom
+              const coordMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+),(\d+\.?\d*)z/);
+              const lat = coordMatch ? parseFloat(coordMatch[1]) : null;
+              const lng = coordMatch ? parseFloat(coordMatch[2]) : null;
+
+              // Name
+              const name = document.querySelector('h1')?.textContent;
+
+              // Type (category)
+              const typeButton = document.querySelector('button[jsaction*="category"]');
+              let type = typeButton?.textContent;
+
+              // Fallback: try to find type near the rating
+              if (!type) {
+                const buttons = document.querySelectorAll('button');
+                for (const btn of buttons) {
+                  const text = btn.textContent?.toLowerCase() || '';
+                  if (
+                    text.includes('restaurant') ||
+                    text.includes('cafe') ||
+                    text.includes('shop') ||
+                    text.includes('bar') ||
+                    text.includes('hotel') ||
+                    text.includes('museum') ||
+                    text.includes('park') ||
+                    text.includes('gallery') ||
+                    text.includes('store')
+                  ) {
+                    type = btn.textContent;
+                    break;
+                  }
+                }
+              }
+
+              // Address
+              let address = null;
+              const addressButtons = document.querySelectorAll(
+                'button[aria-label*="Address"], button[data-item-id="address"]'
+              );
+              for (const btn of addressButtons) {
+                const label = btn.getAttribute('aria-label');
+                if (label && label.includes('Address:')) {
+                  address = label.replace('Address:', '').trim();
+                  break;
+                }
+                const text = btn.textContent;
+                if (text && text.length > 5 && text.length < 200) {
+                  address = text;
+                  break;
+                }
+              }
+
+              // Website
+              let website = null;
+              const websiteLinks = document.querySelectorAll(
+                'a[data-item-id="authority"], a[aria-label*="Website"]'
+              );
+              for (const link of websiteLinks) {
+                if (link.href && !link.href.includes('google.com')) {
+                  website = link.href;
+                  break;
+                }
+              }
+
+              // Rating
+              const ratingImg = document.querySelector('[role="img"][aria-label*="stars"]');
+              const ratingLabel = ratingImg?.getAttribute('aria-label');
+              const ratingMatch = ratingLabel?.match(/(\d+\.?\d*)\s*stars?/i);
+              const rating = ratingMatch ? parseFloat(ratingMatch[1]) : null;
+
+              // Review count
+              const reviewButtons = document.querySelectorAll(
+                'button[aria-label*="reviews"], [aria-label*="Reviews"]'
+              );
+              let reviewCount = null;
+              for (const btn of reviewButtons) {
+                const label = btn.getAttribute('aria-label') || btn.textContent;
+                const countMatch = label?.match(/(\d+)\s*reviews?/i);
+                if (countMatch) {
+                  reviewCount = parseInt(countMatch[1]);
+                  break;
+                }
+              }
+
+              return {
+                name,
+                type,
+                address,
+                lat,
+                lng,
+                website,
+                rating,
+                review_count: reviewCount,
+                google_maps_url: url.split('?')[0]
+              };
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ result: details, sessionId }));
+          } catch (detailsError) {
+            console.error(`[HTTP API] place-details error:`, detailsError.message);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: detailsError.message }));
+          }
         } else if (pathname === '/api/page/close') {
           const sessionId = data.sessionId;
           if (sessionId && activeSessions.has(sessionId)) {
