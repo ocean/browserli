@@ -129,18 +129,18 @@ function startHttpApiServer(playwrightServer) {
           const { page } = activeSessions.get(sessionId);
           
           try {
-            // The script is already a function body as a string
-            // We need to wrap it and execute it
-            const result = await page.evaluate((scriptStr) => {
-              // eslint-disable-next-line no-eval
-              return eval(`(${scriptStr})()`);
-            }, data.script);
+            // The script is a function as a string (from fn.toString())
+            // Convert it to an actual function and execute it
+            // eslint-disable-next-line no-eval
+            const fn = eval(`(${data.script})`);
+            const result = await page.evaluate(fn);
 
             console.log(`[HTTP API] evaluate returned ${Array.isArray(result) ? result.length : typeof result} items`);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ result, sessionId }));
           } catch (evalError) {
             console.error(`[HTTP API] evaluate error:`, evalError.message);
+            console.error(`[HTTP API] Script was:`, data.script.substring(0, 200));
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: evalError.message }));
           }
