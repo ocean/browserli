@@ -1,4 +1,4 @@
-import { connect } from "@cloudflare/playwright";
+import { connect, chromium } from "@cloudflare/playwright";
 import {
   acquirePooledSession,
   releasePooledSession,
@@ -418,9 +418,8 @@ async function handleDataImport(
       console.log(`[DataImport] Connecting to local Playwright server: ${playwrightServerUrl}`);
       
       try {
-        // Dynamic import to avoid issues in production
-        const { chromium } = await import('playwright');
-        browser = await chromium.connect(playwrightServerUrl);
+        // Use connectOverCDP which works in Worker environments for remote servers
+        browser = await chromium.connectOverCDP(playwrightServerUrl);
         // For local Playwright, we don't get session IDs back, so generate one
         sessionId = `local-${Date.now()}`;
         console.log(`[DataImport] Connected to local Playwright server (pseudo-session: ${sessionId})`);
