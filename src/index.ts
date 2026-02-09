@@ -404,20 +404,62 @@ async function handleDataImport(
     
     if (useLocalPlaywright) {
       console.log('[DataImport] Entering local Playwright code path');
-      // Local development: connect to local Playwright server
-      // Default to localhost:3000 if not configured, fallback to env var
-      const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL || 'ws://localhost:3000';
+      // Local development: use HTTP proxy to local Playwright server
+      // This avoids any Node.js module imports in the Worker context
+      const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL || 'http://localhost:3000';
 
       console.log(`[DataImport] Connecting to local Playwright server: ${playwrightServerUrl}`);
       
       try {
-        // Use playwright-core for connecting to remote servers in Worker context
-        // playwright-core doesn't have Node.js-specific dependencies like __dirname
-        const playwrightCore = await import('playwright-core');
-        browser = await playwrightCore.chromium.connectOverCDP(playwrightServerUrl);
+        // Create a simple HTTP-based browser proxy that uses fetch
+        // This works in Worker environments without any Node.js dependencies
+        browser = {
+          _playwrightServerUrl: playwrightServerUrl,
+          async newPage() {
+            // Delegate to the HTTP API on the local server
+            return {
+              _serverUrl: playwrightServerUrl,
+              async goto(url: string, options: any) {
+                const response = await fetch(`${playwrightServerUrl}/api/page/goto`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ url, options }),
+                });
+                if (!response.ok) {
+                  throw new Error(`Failed to navigate to ${url}`);
+                }
+                return response.json();
+              },
+              async evaluate(fn: Function) {
+                const response = await fetch(`${playwrightServerUrl}/api/page/evaluate`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ script: fn.toString() }),
+                });
+                if (!response.ok) {
+                  throw new Error(`Failed to evaluate script`);
+                }
+                return response.json();
+              },
+              async waitForTimeout(ms: number) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+              },
+              async close() {
+                // Close page via HTTP
+                await fetch(`${playwrightServerUrl}/api/page/close`, { method: 'POST' });
+              },
+              async setDefaultTimeout() {},
+              async setDefaultNavigationTimeout() {},
+            };
+          },
+          async close() {
+            // Close browser
+          },
+        };
+        
         // For local Playwright, we don't get session IDs back, so generate one
         sessionId = `local-${Date.now()}`;
-        console.log(`[DataImport] Connected to local Playwright server (pseudo-session: ${sessionId})`);
+        console.log(`[DataImport] Connected to local Playwright server (HTTP proxy: ${sessionId})`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         console.error(`[DataImport] Failed to connect to local Playwright: ${msg}`);
