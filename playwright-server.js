@@ -13,7 +13,7 @@
  */
 
 import { chromium } from 'playwright';
-import { writeFileSync } from 'fs';
+import { writeFileSync, execSync } from 'fs';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -47,10 +47,16 @@ async function startServer() {
     console.log(`📡 WebSocket endpoint: ${wsEndpoint}`);
     console.log(`📝 Endpoint file: ${ENDPOINT_FILE}`);
     console.log('');
-    console.log('Placemake and Browserli will auto-discover this endpoint.');
-    console.log('');
-    console.log('Or manually in .env.local:');
-    console.log(`PLAYWRIGHT_SERVER_URL=${wsEndpoint}`);
+    
+    // Update .env.local with the endpoint
+    try {
+      execSync(`node update-env.js "${wsEndpoint}"`, { cwd: __dirname, stdio: 'inherit' });
+    } catch (error) {
+      console.error('⚠️  Failed to update .env.local automatically');
+      console.error('Please manually update .env.local with:');
+      console.error(`PLAYWRIGHT_SERVER_URL=${wsEndpoint}`);
+    }
+    
     console.log('');
     console.log('Press Ctrl+C to stop the server');
     console.log('');

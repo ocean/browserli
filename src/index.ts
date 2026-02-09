@@ -405,51 +405,13 @@ async function handleDataImport(
     if (useLocalPlaywright) {
       console.log('[DataImport] Entering local Playwright code path');
       // Local development: connect to local Playwright server
-      // Read endpoint file on each request so changes are picked up without restart
-      let playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL;
-      
-      // Try to read from endpoint file first (auto-discovery)
-      // The Playwright server writes the dynamic endpoint to .playwright-endpoint.json on startup
-      try {
-        console.log('[DataImport] Attempting to read .playwright-endpoint.json for auto-discovery');
-        const { readFileSync } = await import('fs');
-        const { join } = await import('path');
-        
-        // Try multiple potential paths for the endpoint file
-        const possiblePaths = [
-          '.playwright-endpoint.json',
-          join(process.cwd(), '.playwright-endpoint.json'),
-          '/Users/drew/code/browserli/.playwright-endpoint.json',
-        ];
-        
-        let endpointData = null;
-        for (const filePath of possiblePaths) {
-          try {
-            const data = readFileSync(filePath, 'utf-8');
-            endpointData = JSON.parse(data);
-            console.log(`[DataImport] Found endpoint file at: ${filePath}`);
-            break;
-          } catch (_) {
-            // Try next path
-          }
-        }
-        
-        if (endpointData && endpointData.url) {
-          playwrightServerUrl = endpointData.url;
-          console.log(`[DataImport] Auto-discovered Playwright endpoint: ${playwrightServerUrl}`);
-        } else {
-          console.log('[DataImport] Endpoint file not found or invalid at any expected location');
-        }
-      } catch (readError) {
-        console.log(`[DataImport] Could not read endpoint file (may be running in Cloudflare Workers): ${readError}`);
-      }
+      const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL;
 
       if (!playwrightServerUrl) {
         throw new Error(
-          'Local Playwright server URL not found. ' +
-          'Ensure .playwright-endpoint.json exists and is readable. ' +
-          'Start the Playwright server with: npm run playwright:server. ' +
-          'Or set PLAYWRIGHT_SERVER_URL in .env.local to the WebSocket endpoint shown when the server starts.'
+          'Local Playwright server URL not configured. ' +
+          'Start the Playwright server with: npm run playwright:server ' +
+          'Then update .env.local with the PLAYWRIGHT_SERVER_URL from the server output.'
         );
       }
 
