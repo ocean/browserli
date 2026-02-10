@@ -221,8 +221,8 @@ async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]> {
           const fullText = link.textContent?.trim() || '';
           if (!fullText || fullText.length < 3) return;
 
-          // Parse: "Place Name4.5(88)" -> name="Place Name", rating=4.5, reviews=88
-          const match = fullText.match(/^(.+?)(\d+\.?\d*)?\(?(\d+)\)?$/);
+          // Parse: "Place Name4.5(88)" or "Place Name4.2(1.51K)" -> name, rating, reviews.
+          const match = fullText.match(/^(.+?)(\d+\.?\d*)\((\d+\.?\d*K?)\)$/);
           let name = fullText;
           let rating: number | undefined;
           let reviewCount: number | undefined;
@@ -230,10 +230,18 @@ async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]> {
           if (match) {
             name = match[1].trim();
             if (match[2]) rating = parseFloat(match[2]);
-            if (match[3]) reviewCount = parseInt(match[3]);
+            if (match[3]) {
+              const countStr = match[3];
+              if (countStr.endsWith('K')) {
+                reviewCount = Math.round(parseFloat(countStr.slice(0, -1)) * 1000);
+              } else {
+                reviewCount = parseInt(countStr);
+              }
+            }
           }
 
-          name = name.replace(/\d+\.?\d*\s*\(\d+\)$/, '').trim();
+          // Fallback cleanup for any remaining rating/review suffixes.
+          name = name.replace(/\d+\.?\d*\s*\(\d+\.?\d*K?\)$/, '').trim();
           if (!name || name.length < 2) return;
 
           placeCards.push({ name, url: href, rating, reviewCount });
@@ -758,6 +766,55 @@ export default {
       return response;
     }
 
+    // Place details endpoint — proxies to local Playwright server.
+    if (url.pathname === "/api/place-details" && request.method === "POST") {
+      const useLocalPlaywright = env.USE_LOCAL_PLAYWRIGHT === "1";
+
+      if (useLocalPlaywright) {
+        const playwrightServerUrl =
+          env.PLAYWRIGHT_SERVER_URL || "http://localhost:3001";
+        const body = await request.json();
+
+        try {
+          const response = await fetch(
+            `${playwrightServerUrl}/api/place-details`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            },
+          );
+
+          const data = await response.json();
+          return new Response(JSON.stringify(data), {
+            status: response.status,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          console.error(`[PlaceDetails] Playwright proxy error: ${msg}`);
+          return new Response(
+            JSON.stringify({ error: `Playwright server error: ${msg}` }),
+            {
+              status: 502,
+              headers: { "Content-Type": "application/json", ...corsHeaders },
+            },
+          );
+        }
+      } else {
+        // TODO: Production implementation using Cloudflare Browser Rendering.
+        return new Response(
+          JSON.stringify({
+            error: "Place details not yet implemented for production",
+          }),
+          {
+            status: 501,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          },
+        );
+      }
+    }
+
     // Session pool debug endpoint.
     if (url.pathname === "/sessions" && request.method === "GET") {
       const sessions = await listPooledSessions(env.BROWSER_SESSIONS);
@@ -778,7 +835,7 @@ export default {
     return new Response(
       JSON.stringify({
         error: "Not found",
-        available: ["/data-import", "/sessions"],
+        available: ["/data-import", "/api/place-details", "/sessions"],
       }),
       {
         status: 404,
