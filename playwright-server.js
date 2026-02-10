@@ -145,19 +145,25 @@ function startHttpApiServer(playwrightServer) {
             res.end(JSON.stringify({ error: evalError.message }));
           }
         } else if (pathname === '/api/place-details') {
-          const sessionId = data.sessionId;
+          let sessionId = data.sessionId;
           const placeUrl = data.url;
-
-          if (!sessionId || !activeSessions.has(sessionId)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid or missing sessionId' }));
-            return;
-          }
+          let autoCreated = false;
 
           if (!placeUrl) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Missing url parameter' }));
             return;
+          }
+
+          // Auto-create session if none provided or if the provided one is expired.
+          if (!sessionId || !activeSessions.has(sessionId)) {
+            sessionId = `place-detail-${Date.now()}`;
+            console.log(`[HTTP API] place-details: auto-creating session ${sessionId}`);
+            const browser = await chromium.connect(playwrightServer.wsEndpoint());
+            const context = await browser.newContext();
+            const page = await context.newPage();
+            activeSessions.set(sessionId, { browser, context, page, createdAt: Date.now() });
+            autoCreated = true;
           }
 
           const { page } = activeSessions.get(sessionId);
@@ -269,10 +275,35 @@ function startHttpApiServer(playwrightServer) {
               };
             });
 
+            // Clean up auto-created sessions after use.
+            if (autoCreated) {
+              const session = activeSessions.get(sessionId);
+              if (session) {
+                await session.page.close();
+                await session.context.close();
+                await session.browser.close();
+                activeSessions.delete(sessionId);
+              }
+            }
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ result: details, sessionId }));
           } catch (detailsError) {
             console.error(`[HTTP API] place-details error:`, detailsError.message);
+
+            // Clean up auto-created sessions on error too.
+            if (autoCreated) {
+              const session = activeSessions.get(sessionId);
+              if (session) {
+                try {
+                  await session.page.close();
+                  await session.context.close();
+                  await session.browser.close();
+                } catch (_) {}
+                activeSessions.delete(sessionId);
+              }
+            }
+
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: detailsError.message }));
           }
