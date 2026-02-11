@@ -192,8 +192,15 @@ function startHttpApiServer(playwrightServer) {
           const { page } = activeSessions.get(sessionId);
 
           try {
-            console.log(`[HTTP API] place-details: ${placeUrl}`);
-            await page.goto(placeUrl, {
+            // Strip @lat,lng,zoom/ from the URL to avoid inheriting stale viewport
+            // coordinates from the collection page. This forces Google Maps to
+            // recentre on the actual place location.
+            const cleanUrl = placeUrl.replace(
+              /\/@-?\d+\.?\d*,-?\d+\.?\d*,\d+\.?\d*z\//,
+              "/",
+            );
+            console.log(`[HTTP API] place-details: ${cleanUrl}`);
+            await page.goto(cleanUrl, {
               waitUntil: "domcontentloaded",
               timeout: 20000,
             });

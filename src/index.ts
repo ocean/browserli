@@ -968,8 +968,15 @@ export default {
         const page = await browser.newPage();
 
         try {
-          console.log(`[PlaceDetails] Navigating to: ${placeUrl}`);
-          await page.goto(placeUrl, {
+          // Strip @lat,lng,zoom/ from the URL to avoid inheriting stale viewport
+          // coordinates from the collection page. This forces Google Maps to
+          // recentre on the actual place location.
+          const cleanUrl = placeUrl.replace(
+            /\/@-?\d+\.?\d*,-?\d+\.?\d*,\d+\.?\d*z\//,
+            "/",
+          );
+          console.log(`[PlaceDetails] Navigating to: ${cleanUrl}`);
+          await page.goto(cleanUrl, {
             waitUntil: "domcontentloaded",
             timeout: 20000,
           });
