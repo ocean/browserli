@@ -27,6 +27,7 @@ interface PlaceCard {
   url: string;
   rating?: number;
   reviewCount?: number;
+  note?: string;
 }
 
 interface PageInfo {
@@ -255,7 +256,24 @@ async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]> {
           name = name.replace(/\d+\.?\d*\s*\(\d+\.?\d*K?\)$/, "").trim();
           if (!name || name.length < 2) return;
 
-          placeCards.push({ name, url: href, rating, reviewCount });
+          // Extract user note from the card container.
+          // Notes live in a span[role="textbox"] within the card's TOmvfe container,
+          // with the full (untruncated) text in the aria-label attribute.
+          let note: string | undefined;
+          const cardContainer = link.closest(".TOmvfe");
+          if (cardContainer) {
+            const noteEl = cardContainer.querySelector(
+              'span[role="textbox"]',
+            );
+            if (noteEl) {
+              note =
+                noteEl.getAttribute("aria-label")?.trim() ||
+                noteEl.textContent?.trim() ||
+                undefined;
+            }
+          }
+
+          placeCards.push({ name, url: href, rating, reviewCount, note });
         } catch (e) {
           // Silently skip malformed entries
         }
