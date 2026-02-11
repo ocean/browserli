@@ -1112,6 +1112,19 @@ export default {
               }
             }
 
+            // Business status (e.g. "Permanently closed", "Temporarily closed").
+            let status = "operational";
+            const statusEl = document.querySelector("span.fCEvvc");
+            if (statusEl) {
+              const statusText =
+                statusEl.textContent?.trim().toLowerCase() || "";
+              if (statusText.includes("permanently closed")) {
+                status = "permanently_closed";
+              } else if (statusText.includes("temporarily closed")) {
+                status = "temporarily_closed";
+              }
+            }
+
             return {
               name,
               type,
@@ -1121,6 +1134,7 @@ export default {
               website,
               rating,
               review_count: reviewCount,
+              status,
               google_maps_url: url.split("?")[0],
             };
           });
