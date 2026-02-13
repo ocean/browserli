@@ -1003,6 +1003,10 @@ export default {
             );
           }
 
+          // Brief settle delay to ensure secondary elements (status badges,
+          // review counts) have rendered after the main content loads.
+          await page.waitForTimeout(500);
+
           const details = await page.evaluate(() => {
             const url = window.location.href;
 
