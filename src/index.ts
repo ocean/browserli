@@ -339,31 +339,41 @@ async function getPaginationInfo(
  */
 async function goToNextPage(page: any): Promise<boolean> {
   try {
-    const nextButton = await page.$(
-      'button[aria-label*="Next page"], button[aria-label*="next"]',
-    );
+    // Use evaluate() for all DOM interaction so it works with both
+    // the local HTTP proxy and real Playwright page objects.
+    const buttonStatus = await page.evaluate(() => {
+      const btn = document.querySelector(
+        'button[aria-label*="Next page"], button[aria-label*="next"]',
+      ) as HTMLButtonElement | null;
+      if (!btn) return "not_found";
+      if (btn.disabled) return "disabled";
+      return "ready";
+    });
 
-    if (!nextButton) {
+    if (buttonStatus === "not_found") {
       console.log("[DataImport] No next button found");
       return false;
     }
 
-    const isDisabled = await nextButton.getAttribute("disabled");
-    if (isDisabled !== null) {
+    if (buttonStatus === "disabled") {
       console.log("[DataImport] Next button is disabled");
       return false;
     }
 
     console.log("[DataImport] Clicking next button...");
 
-    // Get initial place count to detect when page changes
+    // Get initial place count and click in one evaluate call
     const initialCount = await page.evaluate(() => {
-      return document.querySelectorAll('a[href*="/maps/place/"][class*="ir"]')
-        .length;
+      const count = document.querySelectorAll(
+        'a[href*="/maps/place/"][class*="ir"]',
+      ).length;
+      const btn = document.querySelector(
+        'button[aria-label*="Next page"], button[aria-label*="next"]',
+      ) as HTMLButtonElement | null;
+      if (btn) btn.click();
+      return count;
     });
     console.log(`[DataImport] Initial card count: ${initialCount}`);
-
-    await nextButton.click();
 
     // Wait for the page to load new content by polling for DOM changes
     let pageChanged = false;
