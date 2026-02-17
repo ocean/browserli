@@ -19,7 +19,6 @@ updates:
       include: "scope"
     allow:
       - dependency-type: "all"
-    ignore: []
   # Enable version updates for GitHub Actions.
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -39,4 +38,3 @@ updates:
       include: "scope"
     allow:
       - dependency-type: "all"
-    ignore: []
