@@ -26,10 +26,6 @@ updates:
       interval: "monthly"
       day: "sunday"
       time: "03:00"
-    cooldown:
-      semver-major-days: 10
-      semver-minor-days: 5
-      semver-patch-days: 2
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
