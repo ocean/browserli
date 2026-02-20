@@ -28,6 +28,9 @@ interface PlaceCard {
   rating?: number;
   reviewCount?: number;
   note?: string;
+  savedAt?: number;   // Unix timestamp (seconds) when place was saved to the collection.
+  kgId?: string;      // Google Knowledge Graph ID, e.g. "/g/11ltqq0zv9".
+  photoUrl?: string;  // First photo thumbnail URL from the collection blob.
 }
 
 interface PageInfo {
@@ -37,12 +40,19 @@ interface PageInfo {
   hasNextPage: boolean;
 }
 
+interface CollectionMeta {
+  collectionId?: string;
+  collectionName?: string;
+  totalCount?: number;
+}
+
 interface DataImportResponse {
   success: boolean;
   collectionUrl: string;
   sessionId: string;
   places: PlaceCard[];
   pageInfo: PageInfo;
+  collectionMeta?: CollectionMeta;
   durationSeconds: number;
   error?: string;
   debug?: {
@@ -54,11 +64,45 @@ interface DataImportResponse {
 const ITEMS_PER_PAGE = 200;
 const PAGE_LOAD_TIMEOUT = 30000; // 30 seconds for initial page load
 const NAVIGATION_TIMEOUT = 30000; // 30 seconds for pagination clicks
-const EXTRACTION_TIMEOUT = 10000;
 const POLL_INTERVAL = 500; // ms between polls during pagination
 
 /**
- * Validate API key from request headers.
+ * Validate that a URL is a Google Maps collection/place URL to prevent SSRF attacks.
+ */
+function isValidGoogleMapsUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+
+    // Only allow https
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+
+    // Allow google.com domain with /maps/, /collections/, or /placelists/ paths
+    if (parsed.hostname.includes("google.com")) {
+      const path = parsed.pathname;
+      if (
+        path.includes("/maps/") ||
+        path.includes("/collections/") ||
+        path.includes("/placelists/")
+      ) {
+        return true;
+      }
+    }
+
+    // Also allow maps.app.goo.gl short URLs
+    if (parsed.hostname === "maps.app.goo.gl") {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate API key from request headers using constant-time comparison.
  */
 function validateApiKey(request: Request, env: Env): boolean {
   const authHeader = request.headers.get("Authorization");
@@ -72,7 +116,29 @@ function validateApiKey(request: Request, env: Env): boolean {
   }
 
   const allowedKeys = env.API_KEYS.split(",").map((k) => k.trim());
-  return allowedKeys.includes(token);
+
+  // Use constant-time comparison to prevent timing attacks
+  for (const key of allowedKeys) {
+    if (timingSafeEqual(token, key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Constant-time string comparison to prevent timing attacks.
+ */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
 }
 
 /**
@@ -148,7 +214,14 @@ function handleRoot(): Response {
 
   return new Response(html, {
     status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy":
+        "default-src 'self'; style-src 'unsafe-inline'",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    },
   });
 }
 
@@ -207,6 +280,176 @@ async function captureDebugInfo(
   }
 }
 
+interface CollectionPlaceData {
+  savedAt?: number;
+  kgId?: string;
+  photoUrl?: string;
+}
+
+interface CollectionBlobResult {
+  places: Map<string, CollectionPlaceData>;
+  totalCount?: number;
+  collectionId?: string;
+  collectionName?: string;
+}
+
+/**
+ * Extract per-place data and collection metadata from the AF_initDataCallback blob.
+ *
+ * Google Collections pages embed a large data array in a <script class="ds:0"> tag.
+ * Per-place fields extracted:
+ *   - [5]       → Google Maps URL (used as the matching key)
+ *   - [37][5]   → Knowledge Graph ID, e.g. "/g/11ltqq0zv9"
+ *   - [43][0][0] → First photo thumbnail URL
+ *   - [45][0]   → Unix timestamp (seconds) when place was saved to the collection
+ *
+ * Collection-level metadata (capturedData[13]):
+ *   - [13][0]   → Collection ID
+ *   - [13][2]   → Collection name
+ *   - [13][3]   → Total place count (accurate across all pages)
+ *
+ * Returns a Map of normalised URL → CollectionPlaceData, plus collection metadata.
+ */
+async function extractCollectionBlobData(
+  page: any,
+): Promise<CollectionBlobResult> {
+  try {
+    const extracted: {
+      entries: Array<{
+        url: string;
+        savedAt?: number;
+        kgId?: string;
+        photoUrl?: string;
+      }>;
+      totalCount?: number;
+      collectionId?: string;
+      collectionName?: string;
+    } = await page.evaluate(() => {
+      const script = document.querySelector("script.ds\\:0");
+      if (!script) return { entries: [] };
+
+      // Re-execute AF_initDataCallback to capture the parsed data blob.
+      let capturedData: any = null;
+      const origFn = (window as any).AF_initDataCallback;
+      (window as any).AF_initDataCallback = (obj: any) => {
+        capturedData = obj.data;
+      };
+
+      try {
+        eval(script.textContent || "");
+      } catch (_) {
+        return { entries: [] };
+      }
+
+      (window as any).AF_initDataCallback = origFn;
+
+      if (!capturedData?.[1] || !Array.isArray(capturedData[1])) {
+        return { entries: [] };
+      }
+
+      // Collection-level metadata.
+      const meta = capturedData[13];
+      const totalCount =
+        typeof meta?.[3] === "number" ? meta[3] : undefined;
+      const collectionId =
+        typeof meta?.[0] === "string" ? meta[0] : undefined;
+      const collectionName =
+        typeof meta?.[2] === "string" ? meta[2] : undefined;
+
+      const entries: Array<{
+        url: string;
+        savedAt?: number;
+        kgId?: string;
+        photoUrl?: string;
+      }> = [];
+
+      for (const place of capturedData[1]) {
+        const url = place?.[5];
+        if (typeof url !== "string" || !url) continue;
+
+        const savedAtRaw = place?.[45]?.[0];
+        const kgIdRaw = place?.[37]?.[5];
+        const photoUrlRaw = place?.[43]?.[0]?.[0];
+
+        entries.push({
+          url,
+          savedAt:
+            typeof savedAtRaw === "number" && savedAtRaw > 0
+              ? savedAtRaw
+              : undefined,
+          kgId:
+            typeof kgIdRaw === "string" && kgIdRaw ? kgIdRaw : undefined,
+          photoUrl:
+            typeof photoUrlRaw === "string" && photoUrlRaw
+              ? photoUrlRaw
+              : undefined,
+        });
+      }
+
+      return { entries, totalCount, collectionId, collectionName };
+    });
+
+    // Build lookup map keyed by normalised URL pathname for matching against DOM-scraped hrefs.
+    const map = new Map<string, CollectionPlaceData>();
+    for (const entry of extracted.entries) {
+      const normalised = normaliseGoogleMapsUrl(entry.url);
+      map.set(normalised, {
+        savedAt: entry.savedAt,
+        kgId: entry.kgId,
+        photoUrl: entry.photoUrl,
+      });
+    }
+
+    console.log(
+      `[DataImport] Extracted ${map.size} place records from AF_initDataCallback blob`,
+    );
+
+    return {
+      places: map,
+      totalCount: extracted.totalCount,
+      collectionId: extracted.collectionId,
+      collectionName: extracted.collectionName,
+    };
+  } catch (error) {
+    console.error("[DataImport] Error extracting collection blob data:", error);
+    return { places: new Map() };
+  }
+}
+
+/**
+ * Build a URL with the given pageNumber query parameter for direct page navigation.
+ * Google Collections supports ?pageNumber=N (1-indexed) for stable pagination.
+ */
+function addPageNumberToUrl(baseUrl: string, pageNum: number): string {
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set("pageNumber", String(pageNum + 1));
+    return url.toString();
+  } catch {
+    const separator = baseUrl.includes("?") ? "&" : "?";
+    return `${baseUrl}${separator}pageNumber=${pageNum + 1}`;
+  }
+}
+
+/**
+ * Normalise a Google Maps URL for matching.
+ * Strips query strings and decodes unicode escapes so URLs from the
+ * AF_initDataCallback blob can be matched against DOM-scraped hrefs.
+ */
+function normaliseGoogleMapsUrl(url: string): string {
+  try {
+    // Decode any unicode escapes (e.g. \u003d → =).
+    const decoded = url.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16)),
+    );
+    const parsed = new URL(decoded);
+    // Keep only the pathname and the data= parameter for matching.
+    return parsed.pathname;
+  } catch {
+    return url;
+  }
+}
+
 /**
  * Extract place data from cards on current page.
  * Returns structured data from visible place cards ONLY on current viewport.
@@ -262,9 +505,7 @@ async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]> {
           let note: string | undefined;
           const cardContainer = link.closest(".TOmvfe");
           if (cardContainer) {
-            const noteEl = cardContainer.querySelector(
-              'span[role="textbox"]',
-            );
+            const noteEl = cardContainer.querySelector('span[role="textbox"]');
             if (noteEl) {
               note =
                 noteEl.getAttribute("aria-label")?.trim() ||
@@ -437,15 +678,13 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
       );
     }
 
-    // Validate URL
-    if (
-      !body.url.includes("google.com/collections") &&
-      !body.url.includes("maps.app.goo.gl")
-    ) {
+    // Validate URL to prevent SSRF attacks
+    if (!isValidGoogleMapsUrl(body.url)) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "Invalid URL: must be a Google Maps collection",
+          error:
+            "Invalid URL: must be a valid Google Maps collection or place URL",
         }),
         { status: 400, headers: { "Content-Type": "application/json" } },
       );
@@ -647,29 +886,44 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
     let allPlaces: PlaceCard[] = [];
 
     try {
-      // Load collection page
-      console.log(`[DataImport] Loading collection: ${body.url}`);
-      await page.goto(body.url, {
+      // Navigate directly to the correct page using the pageNumber query param.
+      // Google Collections supports ?pageNumber=N (1-indexed) for stable pagination —
+      // this is simpler and more reliable than click-based navigation, and also
+      // triggers a fresh AF_initDataCallback blob for each page's places.
+      const targetUrl =
+        pageNum > 0 ? addPageNumberToUrl(body.url, pageNum) : body.url;
+      console.log(
+        `[DataImport] Loading collection page ${pageNum + 1}: ${targetUrl}`,
+      );
+      await page.goto(targetUrl, {
         waitUntil: "domcontentloaded",
         timeout: PAGE_LOAD_TIMEOUT,
       });
 
-      // If resuming pagination, navigate to correct page
-      if (pageNum > 0) {
-        console.log(`[DataImport] Resuming from page ${pageNum + 1}`);
-        for (let i = 0; i < pageNum; i++) {
-          const hasNext = await goToNextPage(page);
-          if (!hasNext) {
-            console.log(`[DataImport] Could not reach page ${i + 1}`);
-            break;
-          }
-          await page.waitForTimeout(1000);
-        }
-      }
+      // Extract per-place data and collection metadata from the embedded blob.
+      const blobData = await extractCollectionBlobData(page);
 
-      // Extract places from current page
+      // Extract place cards from the current page DOM.
       console.log(`[DataImport] Extracting places from page ${pageNum + 1}...`);
       const places = await extractPlaceCardsFromPage(page);
+
+      // Merge blob data (savedAt, kgId, photoUrl) into place cards by matching normalised URLs.
+      if (blobData.places.size > 0) {
+        let matched = 0;
+        for (const place of places) {
+          const normalised = normaliseGoogleMapsUrl(place.url);
+          const data = blobData.places.get(normalised);
+          if (data) {
+            if (data.savedAt) place.savedAt = data.savedAt;
+            if (data.kgId) place.kgId = data.kgId;
+            if (data.photoUrl) place.photoUrl = data.photoUrl;
+            matched++;
+          }
+        }
+        console.log(
+          `[DataImport] Matched ${matched}/${places.length} places with blob data`,
+        );
+      }
 
       if (places.length === 0) {
         console.log("[DataImport] No places found on current page");
@@ -680,9 +934,9 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
         allPlaces.push(...places);
       }
 
-      // Get pagination info
-      const { total, hasNext } = await getPaginationInfo(page);
-      totalCount = total;
+      // Get pagination info — use blob totalCount as primary source (more reliable than DOM).
+      const { total: domTotal, hasNext } = await getPaginationInfo(page);
+      totalCount = blobData.totalCount ?? domTotal;
 
       console.log(
         `[DataImport] Pagination info: total=${total}, hasNext=${hasNext}, itemsExtracted=${places.length}`,
@@ -718,6 +972,15 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
           totalCount,
           hasNextPage: hasNext && endIndex < totalCount,
         },
+        ...(blobData.collectionId || blobData.collectionName || blobData.totalCount != null
+          ? {
+              collectionMeta: {
+                collectionId: blobData.collectionId,
+                collectionName: blobData.collectionName,
+                totalCount: blobData.totalCount,
+              },
+            }
+          : {}),
         durationSeconds: duration,
         ...(debugInfo && { debug: debugInfo }),
       };
@@ -782,13 +1045,24 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
     return new Response(
       JSON.stringify({
         success: false,
-        error: errorMessage,
+        error: isRateLimit
+          ? "Rate limit exceeded. Please retry after 2 minutes."
+          : "Failed to process data import request",
         isRateLimit,
       }),
       { status: statusCode, headers },
     );
   }
 }
+
+/**
+ * Security headers to add to all responses.
+ */
+const securityHeaders = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+};
 
 /**
  * Main request handler.
@@ -801,6 +1075,7 @@ export default {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      ...securityHeaders,
     };
 
     // CORS preflight
@@ -816,8 +1091,51 @@ export default {
       return handleRoot();
     }
 
+    // Rate limiting for authenticated endpoints (production only)
+    if (url.pathname !== "/") {
+      try {
+        if (env.API_RATE_LIMITER) {
+          const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+          const { success } = await env.API_RATE_LIMITER.limit({ key: ip });
+
+          if (!success) {
+            console.warn(`[RateLimit] Rate limit exceeded for IP: ${ip}`);
+            return new Response(
+              JSON.stringify({
+                success: false,
+                error: "Rate limit exceeded",
+              }),
+              {
+                status: 429,
+                headers: {
+                  "Content-Type": "application/json",
+                  "Retry-After": "60",
+                  ...corsHeaders,
+                },
+              },
+            );
+          }
+        }
+      } catch (rateLimitError) {
+        // Rate limiting not available in local dev - skip silently
+        console.debug(
+          `[RateLimit] Skipped (not available in dev): ${rateLimitError}`,
+        );
+      }
+    }
+
     // Data import endpoint (requires API key)
     if (!validateApiKey(request, env)) {
+      const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+      const authHeader = request.headers.get("Authorization") || "none";
+      console.error(
+        `[Auth] Failed authentication attempt - IP: ${ip}, Path: ${
+          url.pathname
+        }, Method: ${request.method}, Auth Header: ${
+          authHeader ? "present" : "missing"
+        }`,
+      );
+
       if (url.pathname !== "/" && request.method === "GET") {
         return new Response(null, {
           status: 302,
@@ -828,7 +1146,7 @@ export default {
       return new Response(
         JSON.stringify({
           success: false,
-          error: "Unauthorized: invalid or missing API key",
+          error: "Unauthorized",
         }),
         {
           status: 401,
@@ -877,7 +1195,7 @@ export default {
           const msg = error instanceof Error ? error.message : String(error);
           console.error(`[PlaceDetails] Playwright proxy error: ${msg}`);
           return new Response(
-            JSON.stringify({ error: `Playwright server error: ${msg}` }),
+            JSON.stringify({ error: "Failed to extract place details" }),
             {
               status: 502,
               headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -1181,16 +1499,38 @@ export default {
           await page.close();
           await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId);
 
-          return new Response(JSON.stringify({ error: msg }), {
-            status: 500,
-            headers: { "Content-Type": "application/json", ...corsHeaders },
-          });
+          return new Response(
+            JSON.stringify({ error: "Failed to extract place details" }),
+            {
+              status: 500,
+              headers: { "Content-Type": "application/json", ...corsHeaders },
+            },
+          );
         }
       }
     }
 
-    // Session pool debug endpoint.
+    // Session pool debug endpoint (local development only).
     if (url.pathname === "/sessions" && request.method === "GET") {
+      // Only allow access during local development
+      if (env.USE_LOCAL_PLAYWRIGHT !== "1") {
+        console.warn(
+          `[Debug] /sessions endpoint accessed in production from ${
+            request.headers.get("CF-Connecting-IP") || "unknown"
+          }`,
+        );
+        return new Response(
+          JSON.stringify({
+            error: "Not found",
+            available: ["/data-import", "/api/place-details"],
+          }),
+          {
+            status: 404,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          },
+        );
+      }
+
       const sessions = await listPooledSessions(env.BROWSER_SESSIONS);
       const body = {
         sessions,
