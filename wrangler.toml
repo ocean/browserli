@@ -15,6 +15,15 @@ binding = "BROWSER_SESSIONS"
 id = "796d36c15db048bb8175e416b4bf0bdd"
 preview_id = "dee9fcdcc6624e169f7e3421ae8539ed"
 
+# Rate Limiting API configuration
+# Prevents brute-force attacks on API endpoints
+[[ratelimits]]
+name = "API_RATE_LIMITER"
+namespace_id = "1001"
+[ratelimits.simple]
+limit = 300
+period = 60
+
 [[routes]]
 pattern = "browserli.drewr.dev"
 custom_domain = true
