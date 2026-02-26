@@ -1422,6 +1422,9 @@ export default {
               const buttons = document.querySelectorAll("button");
               for (const btn of buttons) {
                 const text = btn.textContent?.toLowerCase() || "";
+                // Skip "Nearby restaurants", "Nearby hotels", etc. — these are
+                // navigation buttons further down the page, not the place category.
+                if (text.startsWith("nearby")) continue;
                 if (
                   text.includes("restaurant") ||
                   text.includes("cafe") ||
