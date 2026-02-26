@@ -336,7 +336,7 @@ async function extractCollectionBlobData(
       };
 
       try {
-        eval(script.textContent || "");
+        new Function(script.textContent || "")();
       } catch (_) {
         return { entries: [] };
       }
@@ -939,7 +939,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
       totalCount = blobData.totalCount ?? domTotal;
 
       console.log(
-        `[DataImport] Pagination info: total=${total}, hasNext=${hasNext}, itemsExtracted=${places.length}`,
+        `[DataImport] Pagination info: total=${totalCount}, hasNext=${hasNext}, itemsExtracted=${places.length}`,
       );
 
       // Capture debug info if requested
@@ -1176,17 +1176,53 @@ export default {
           env.PLAYWRIGHT_SERVER_URL || "http://localhost:3001";
         const body = await request.json();
 
+        // Acquire a session from the pool for local Playwright too
+        const poolResult = await acquirePooledSession(
+          env.BROWSER_SESSIONS,
+          env.BROWSER,
+          body.sessionId,
+          body.url,
+        );
+
+        if (!poolResult) {
+          return new Response(
+            JSON.stringify({
+              error:
+                "All browser sessions are currently busy. Please retry shortly.",
+              poolFull: true,
+            }),
+            {
+              status: 503,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": "10",
+                ...corsHeaders,
+              },
+            },
+          );
+        }
+
         try {
           const response = await fetch(
             `${playwrightServerUrl}/api/place-details`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
+              body: JSON.stringify({
+                ...body,
+                sessionId: poolResult.sessionId,
+              }),
             },
           );
 
           const data = await response.json();
+
+          // Release session back to pool
+          await releasePooledSession(
+            env.BROWSER_SESSIONS,
+            poolResult.sessionId,
+          );
+
           return new Response(JSON.stringify(data), {
             status: response.status,
             headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -1194,6 +1230,13 @@ export default {
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           console.error(`[PlaceDetails] Playwright proxy error: ${msg}`);
+
+          // Release session back to pool on error too
+          await releasePooledSession(
+            env.BROWSER_SESSIONS,
+            poolResult.sessionId,
+          );
+
           return new Response(
             JSON.stringify({ error: "Failed to extract place details" }),
             {
