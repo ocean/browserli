@@ -21,7 +21,7 @@
     "google-maps"
   ],
   "dependencies": {
-    "@cloudflare/playwright": "^1.1.0"
+    "@cloudflare/playwright": "^1.1.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250203.0",
