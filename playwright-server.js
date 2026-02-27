@@ -120,7 +120,13 @@ function startHttpApiServer(playwrightServer) {
 
           const { page } = activeSessions.get(sessionId);
           console.log(`[HTTP API] goto: ${data.url}`);
-          await page.goto(data.url, data.options || {});
+          // Add default 30 second timeout if not specified
+          const gotoOptions = {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+            ...data.options,
+          };
+          await page.goto(data.url, gotoOptions);
 
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ success: true, sessionId }));
@@ -140,12 +146,19 @@ function startHttpApiServer(playwrightServer) {
             // Convert it to an actual function and execute it
             // eslint-disable-next-line no-eval
             const fn = eval(`(${data.script})`);
-            const result = await page.evaluate(fn);
+            // Add 10 second timeout to prevent hanging requests
+            const result = await Promise.race([
+              page.evaluate(fn),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error("Evaluation timeout: exceeded 10 seconds")), 10000)
+              )
+            ]);
 
+            const resultType = Array.isArray(result)
+              ? `${result.length} items`
+              : `${typeof result}${result !== null && typeof result === 'object' ? ` (object)` : ''}`;
             console.log(
-              `[HTTP API] evaluate returned ${
-                Array.isArray(result) ? result.length : typeof result
-              } items`,
+              `[HTTP API] evaluate returned ${resultType}`,
             );
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ result, sessionId }));
@@ -281,6 +294,9 @@ function startHttpApiServer(playwrightServer) {
                 const buttons = document.querySelectorAll("button");
                 for (const btn of buttons) {
                   const text = btn.textContent?.toLowerCase() || "";
+                  // Skip "Nearby restaurants", "Nearby hotels", etc. — these are
+                  // navigation buttons further down the page, not the place category.
+                  if (text.startsWith("nearby")) continue;
                   if (
                     text.includes("restaurant") ||
                     text.includes("cafe") ||
