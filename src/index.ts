@@ -1370,15 +1370,58 @@ export default {
 
           const details = await page.evaluate(() => {
             const url = window.location.href;
+            let lat: number | null = null;
+            let lng: number | null = null;
 
-            // Extract coordinates from URL pattern @lat,lng,zoom.
-            const coordMatch = url.match(
-              /@(-?\d+\.\d+),(-?\d+\.\d+),(\d+\.?\d*)z/,
+            // 1. JSON-LD structured data — server-rendered, contains the actual
+            //    pin coordinates rather than the browser viewport centre.
+            const jsonLdScripts = document.querySelectorAll(
+              'script[type="application/ld+json"]',
             );
-            let lat = coordMatch ? parseFloat(coordMatch[1]) : null;
-            let lng = coordMatch ? parseFloat(coordMatch[2]) : null;
+            for (const script of jsonLdScripts) {
+              try {
+                const data = JSON.parse(script.textContent || "");
+                // Handle both top-level geo and nested location.geo.
+                const geo = data?.geo ?? data?.location?.geo;
+                const rawLat = geo?.latitude;
+                const rawLng = geo?.longitude;
+                if (rawLat != null && rawLng != null) {
+                  const parsedLat =
+                    typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
+                  const parsedLng =
+                    typeof rawLng === "number" ? rawLng : parseFloat(rawLng);
+                  if (!isNaN(parsedLat) && !isNaN(parsedLng)) {
+                    lat = parsedLat;
+                    lng = parsedLng;
+                    break;
+                  }
+                }
+              } catch (_) {
+                // Ignore malformed JSON-LD.
+              }
+            }
 
-            // Fallback: canonical link.
+            // 2. og:image static map — centred on the actual pin location,
+            //    not affected by the info-panel viewport shift.
+            if (lat === null || lng === null) {
+              const ogImage = (
+                document.querySelector(
+                  'meta[property="og:image"]',
+                ) as HTMLMetaElement
+              )?.content;
+              if (ogImage) {
+                const m = ogImage.match(
+                  /center=(-?\d+\.\d+)%2C(-?\d+\.\d+)/,
+                );
+                if (m) {
+                  lat = parseFloat(m[1]);
+                  lng = parseFloat(m[2]);
+                }
+              }
+            }
+
+            // 3. Canonical link — server-set, more likely to reflect pin coords
+            //    than the runtime URL which shifts due to the info panel.
             if (lat === null || lng === null) {
               const canonical = (
                 document.querySelector(
@@ -1394,19 +1437,16 @@ export default {
               }
             }
 
-            // Fallback: og:image meta tag.
+            // 4. Last resort: URL viewport centre. This is shifted ~200 m west
+            //    of the actual pin because Google Maps offsets the map to keep
+            //    the pin centred in the visible area beside the info panel.
             if (lat === null || lng === null) {
-              const ogImage = (
-                document.querySelector(
-                  'meta[property="og:image"]',
-                ) as HTMLMetaElement
-              )?.content;
-              if (ogImage) {
-                const m = ogImage.match(/center=(-?\d+\.\d+)%2C(-?\d+\.\d+)/);
-                if (m) {
-                  lat = parseFloat(m[1]);
-                  lng = parseFloat(m[2]);
-                }
+              const coordMatch = url.match(
+                /@(-?\d+\.\d+),(-?\d+\.\d+),(\d+\.?\d*)z/,
+              );
+              if (coordMatch) {
+                lat = parseFloat(coordMatch[1]);
+                lng = parseFloat(coordMatch[2]);
               }
             }
 
