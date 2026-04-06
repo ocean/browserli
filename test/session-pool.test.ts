@@ -177,48 +177,29 @@ describe("acquirePooledSession", () => {
     });
   });
 
-  describe("429 retry backoff", () => {
-    it("retries once after a 429 and succeeds on the second attempt", async () => {
-      vi.useFakeTimers();
-
-      mockAcquire
-        .mockRejectedValueOnce(new Error("Unable to create new browser: code: 429: message: Rate limit exceeded"))
-        .mockResolvedValueOnce({ sessionId: "sess-retry" });
-
-      // Attach the result handler first so the eventual resolution is caught,
-      // then advance all timers to skip the backoff delay.
-      const resultPromise = acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER);
-      await vi.runAllTimersAsync();
-      const result = await resultPromise;
-
-      expect(result).toEqual({ sessionId: "sess-retry", reused: false });
-      expect(mockAcquire).toHaveBeenCalledTimes(2);
-
-      vi.useRealTimers();
-    });
-
-    it("returns null (pool-full signal) after exhausting all 429 retries", async () => {
+  describe("429 rate-limit handling", () => {
+    it("returns null (pool-full signal) immediately on a 429", async () => {
+      // Use fake timers to advance past the pre-acquire jitter instantly.
       vi.useFakeTimers();
 
       mockAcquire.mockRejectedValue(
         new Error("Unable to create new browser: code: 429: message: Rate limit exceeded"),
       );
 
-      // Start the call and advance all timers (jitter + backoff delays).
       const resultPromise = acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER);
       await vi.runAllTimersAsync();
       const result = await resultPromise;
 
-      // Returns null so the caller receives a 503 and retries with its own backoff,
-      // rather than crashing the Worker with an unhandled exception.
+      // Returns null so the caller produces a 503 and Placemake's jittered
+      // retry logic spreads the back-pressure instead of re-bursting.
       expect(result).toBeNull();
-      // 3 attempts total (initial + 2 retries).
-      expect(mockAcquire).toHaveBeenCalledTimes(3);
+      // Single attempt only — no internal retry that would compound the storm.
+      expect(mockAcquire).toHaveBeenCalledTimes(1);
 
       vi.useRealTimers();
     });
 
-    it("does not retry on non-429 errors", async () => {
+    it("propagates non-429 errors immediately", async () => {
       // Use fake timers to advance past the pre-acquire jitter instantly.
       vi.useFakeTimers();
 

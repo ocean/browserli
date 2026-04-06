@@ -92,38 +92,22 @@ async function putSession(
 }
 
 /**
- * Acquire a Cloudflare browser session with exponential backoff on 429.
+ * Attempt to acquire a Cloudflare browser session (single attempt, no retry).
  *
- * Cloudflare rate-limits session creation when multiple requests race.
- * Retrying with jitter breaks the synchronisation between concurrent callers.
- * The keepAliveMs value is forwarded to acquire() so the browser session
- * stays alive for the configured inactivity period.
+ * Retrying 429s inside the Worker is counter-productive: multiple Workers
+ * retry simultaneously, compounding the rate-limit pressure and producing a
+ * sustained storm. Instead we throw immediately and let the caller (which
+ * converts the error to null/503) rely on Placemake's jittered retry logic
+ * to spread the back-pressure over several seconds.
+ *
+ * keepAliveMs is forwarded to acquire() so the session stays alive for the
+ * configured inactivity period between Worker invocations.
  */
 async function acquireWithRetry(
   browserBinding: any,
   keepAliveMs: number,
-  maxAttempts = 3,
 ): Promise<{ sessionId: string }> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      return await acquire(browserBinding, { keep_alive: keepAliveMs });
-    } catch (error) {
-      const isRateLimit =
-        error instanceof Error && error.message.includes("429");
-      if (!isRateLimit || attempt === maxAttempts - 1) throw error;
-
-      // Exponential backoff with jitter: 1-3 s, 2-6 s, …
-      const base = Math.pow(2, attempt) * 1000;
-      const jitter = Math.random() * base;
-      const delay = Math.round(base + jitter);
-      console.warn(
-        `[SessionPool] Rate limited acquiring session, retrying in ${delay}ms (attempt ${attempt + 1}/${maxAttempts})`,
-      );
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-  // Unreachable — the loop always throws or returns.
-  throw new Error("acquireWithRetry exhausted retries");
+  return acquire(browserBinding, { keep_alive: keepAliveMs });
 }
 
 /**

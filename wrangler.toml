@@ -11,7 +11,7 @@ usage_model = "unbound"
 # Free plan defaults : BROWSER_MAX_SESSIONS = "2",  BROWSER_KEEP_ALIVE_MS = "60000"
 # Paid plan maximums : BROWSER_MAX_SESSIONS = "10", BROWSER_KEEP_ALIVE_MS = "600000"
 [vars]
-BROWSER_MAX_SESSIONS = "8"
+BROWSER_MAX_SESSIONS = "3"
 BROWSER_KEEP_ALIVE_MS = "300000"
 
 # Logging for when on a paid plan.
