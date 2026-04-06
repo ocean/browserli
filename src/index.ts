@@ -13,6 +13,7 @@ interface Env {
   BROWSER_SESSIONS: KVNamespace;
   USE_LOCAL_PLAYWRIGHT?: string;
   PLAYWRIGHT_SERVER_URL?: string;
+  API_RATE_LIMITER?: { limit: (opts: { key: string }) => Promise<{ success: boolean }> };
 }
 
 interface DataImportRequest {
@@ -247,7 +248,7 @@ async function captureDebugInfo(
           innerHTML: a.innerHTML.slice(0, 150),
           hasChildren: (a as HTMLElement).children.length,
           parent: {
-            tag: (a.parentElement?.tagName).toLowerCase(),
+            tag: a.parentElement?.tagName.toLowerCase(),
             classes: a.parentElement?.className.slice(0, 100),
           },
         }));
@@ -752,10 +753,10 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
                   },
                 );
                 if (!response.ok) {
-                  const error = await response.json();
+                  const error = await response.json() as { error: string };
                   throw new Error(`Failed to evaluate script: ${error.error}`);
                 }
-                const data = await response.json();
+                const data = await response.json() as { result: unknown };
                 return data.result;
               },
               async waitForTimeout(ms: number) {
@@ -1174,7 +1175,7 @@ export default {
       if (useLocalPlaywright) {
         const playwrightServerUrl =
           env.PLAYWRIGHT_SERVER_URL || "http://localhost:3001";
-        const body = await request.json();
+        const body = await request.json() as { url?: string; sessionId?: string };
 
         // Acquire a session from the pool for local Playwright too
         const poolResult = await acquirePooledSession(
