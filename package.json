@@ -11,7 +11,9 @@
     "deploy": "wrangler deploy",
     "build": "wrangler build",
     "lint": "eslint src --ext .ts",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "cloudflare",
@@ -24,9 +26,11 @@
     "@cloudflare/playwright": "^1.1.2"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.14.1",
     "@cloudflare/workers-types": "^4.20260317.1",
     "playwright": "^1.58.2",
     "typescript": "^6.0.2",
+    "vitest": "^4.1.2",
     "wrangler": "^4.74.0"
   }
 }

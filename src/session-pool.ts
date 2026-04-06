@@ -26,7 +26,7 @@ export const MAX_CONCURRENT_SESSIONS = 2;
  * dead session. Busy session entries use a longer TTL since the browser is
  * actively being used.
  */
-const IDLE_SESSION_TTL_SECONDS = 55;
+const IDLE_SESSION_TTL_SECONDS = 60;
 const BUSY_SESSION_TTL_SECONDS = 120;
 
 /** KV key prefix for session entries. */
