@@ -55,10 +55,38 @@ async function putSession(
     expirationTtl: SESSION_TTL_SECONDS,
     metadata,
   });
+}
 
-  console.log(
-    `[SessionPool] Stored session ${session.sessionId} as ${session.status} (TTL: ${SESSION_TTL_SECONDS}s)`,
-  );
+/**
+ * Acquire a Cloudflare browser session with exponential backoff on 429.
+ *
+ * Cloudflare rate-limits session creation when multiple requests race.
+ * Retrying with jitter breaks the synchronisation between concurrent callers.
+ */
+async function acquireWithRetry(
+  browserBinding: any,
+  maxAttempts = 3,
+): Promise<{ sessionId: string }> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await acquire(browserBinding);
+    } catch (error) {
+      const isRateLimit =
+        error instanceof Error && error.message.includes("429");
+      if (!isRateLimit || attempt === maxAttempts - 1) throw error;
+
+      // Exponential backoff with jitter: 1-3 s, 2-6 s, …
+      const base = Math.pow(2, attempt) * 1000;
+      const jitter = Math.random() * base;
+      const delay = Math.round(base + jitter);
+      console.warn(
+        `[SessionPool] Rate limited acquiring session, retrying in ${delay}ms (attempt ${attempt + 1}/${maxAttempts})`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  // Unreachable — the loop always throws or returns.
+  throw new Error("acquireWithRetry exhausted retries");
 }
 
 /**
@@ -111,15 +139,9 @@ export async function acquirePooledSession(
   });
   const activeKeys = listResult.keys;
 
-  console.log(
-    `[SessionPool] Active sessions: ${activeKeys.length}/${MAX_CONCURRENT_SESSIONS}`,
-  );
-
   // If room in the pool, acquire a fresh session.
   if (activeKeys.length < MAX_CONCURRENT_SESSIONS) {
-    console.log(`[SessionPool] Pool has capacity, acquiring new session`);
-
-    const cfSession = await acquire(browserBinding);
+    const cfSession = await acquireWithRetry(browserBinding);
     const sessionId = cfSession.sessionId;
 
     const session: PooledSession = {
@@ -155,7 +177,6 @@ export async function acquirePooledSession(
   }
 
   // All sessions are busy.
-  console.log(`[SessionPool] Pool full — all ${MAX_CONCURRENT_SESSIONS} sessions are busy`);
   return null;
 }
 
@@ -182,7 +203,6 @@ export async function releasePooledSession(
   session.lastUsedAt = new Date().toISOString();
   await putSession(kv, session);
 
-  console.log(`[SessionPool] Released session ${sessionId} → idle`);
 }
 
 /**
