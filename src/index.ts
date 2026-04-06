@@ -1546,7 +1546,14 @@ export default {
           });
 
           await page.close();
-          await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId, poolOptions.keepAliveMs);
+          // Close and remove the session rather than releasing to idle.
+          // Browser sessions do not survive across Worker invocations reliably —
+          // the SDK's internal keepalive tasks are cancelled by the Workers
+          // runtime after the response is sent, which kills the WebSocket
+          // connection even though CF's infrastructure thinks the session is
+          // alive. Closing explicitly avoids dead-session reconnect errors.
+          try { await browser.close(); } catch (_) {}
+          await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
 
           console.log(
             `[PlaceDetails] Extracted: ${details.name} | coords={${details.lat}, ${details.lng}}`,
@@ -1564,7 +1571,8 @@ export default {
           console.error(`[PlaceDetails] Error: ${msg}`);
 
           await page.close();
-          await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId, poolOptions.keepAliveMs);
+          try { await browser.close(); } catch (_) {}
+          await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
 
           return new Response(
             JSON.stringify({ error: "Failed to extract place details" }),
