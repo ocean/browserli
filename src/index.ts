@@ -811,7 +811,19 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
         }
 
         sessionId = retryResult.sessionId;
-        browser = await connect(env.BROWSER, sessionId);
+        try {
+          browser = await connect(env.BROWSER, sessionId);
+        } catch (retryConnectError) {
+          const retryMsg = retryConnectError instanceof Error
+            ? retryConnectError.message
+            : String(retryConnectError);
+          console.error(`[DataImport] Failed to connect to retry session ${sessionId}: ${retryMsg}`);
+          await removePooledSession(env.BROWSER_SESSIONS, sessionId);
+          return new Response(
+            JSON.stringify({ success: false, error: "Browser session unavailable. Please retry shortly." }),
+            { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "10" } },
+          );
+        }
         console.log(`[DataImport] Connected to retry session ${sessionId}`);
       }
     }
@@ -1197,6 +1209,7 @@ export default {
         }
       } else {
         // Production: use Cloudflare Browser Rendering with session pool.
+        try {
         const body = (await request.json()) as { url?: string };
         const placeUrl = body.url;
 
@@ -1286,7 +1299,19 @@ export default {
           }
 
           poolSessionId = retryResult.sessionId;
-          browser = await connect(env.BROWSER, poolSessionId);
+          try {
+            browser = await connect(env.BROWSER, poolSessionId);
+          } catch (retryConnectError) {
+            const retryMsg = retryConnectError instanceof Error
+              ? retryConnectError.message
+              : String(retryConnectError);
+            console.error(`[PlaceDetails] Failed to connect to retry session ${poolSessionId}: ${retryMsg}`);
+            await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
+            return new Response(
+              JSON.stringify({ error: "Browser session unavailable. Please retry shortly.", poolFull: true }),
+              { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "10", ...corsHeaders } },
+            );
+          }
           console.log(
             `[PlaceDetails] Connected to retry session ${poolSessionId}`,
           );
@@ -1546,6 +1571,27 @@ export default {
             {
               status: 500,
               headers: { "Content-Type": "application/json", ...corsHeaders },
+            },
+          );
+        }
+        } catch (outerError) {
+          const msg = outerError instanceof Error ? outerError.message : String(outerError);
+          console.error(`[PlaceDetails] Unhandled error: ${msg}`);
+          const isRateLimit = msg.includes("429") || msg.includes("Rate limit");
+          return new Response(
+            JSON.stringify({
+              error: isRateLimit
+                ? "Rate limit exceeded — browser sessions are saturated. Please retry shortly."
+                : "An unexpected error occurred. Please retry shortly.",
+              poolFull: isRateLimit,
+            }),
+            {
+              status: 503,
+              headers: {
+                "Content-Type": "application/json",
+                "Retry-After": isRateLimit ? "30" : "10",
+                ...corsHeaders,
+              },
             },
           );
         }
