@@ -5,7 +5,16 @@ import {
   removePooledSession,
   listPooledSessions,
   MAX_CONCURRENT_SESSIONS,
+  type SessionPoolOptions,
 } from "./session-pool";
+
+/** Parse plan-tier pool options from wrangler env vars. */
+function parsePoolOptions(env: Env): SessionPoolOptions {
+  return {
+    maxSessions: parseInt(env.BROWSER_MAX_SESSIONS ?? "2", 10),
+    keepAliveMs: parseInt(env.BROWSER_KEEP_ALIVE_MS ?? "60000", 10),
+  };
+}
 import { isValidGoogleMapsUrl, timingSafeEqual, validateApiKey } from "./utils";
 
 interface Env {
@@ -15,6 +24,10 @@ interface Env {
   USE_LOCAL_PLAYWRIGHT?: string;
   PLAYWRIGHT_SERVER_URL?: string;
   API_RATE_LIMITER?: { limit: (opts: { key: string }) => Promise<{ success: boolean }> };
+  /** Maximum concurrent browser sessions (set via wrangler vars). */
+  BROWSER_MAX_SESSIONS?: string;
+  /** Browser keep-alive duration in milliseconds (set via wrangler vars). */
+  BROWSER_KEEP_ALIVE_MS?: string;
 }
 
 interface DataImportRequest {
@@ -618,6 +631,8 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
       );
     }
 
+    const poolOptions = parsePoolOptions(env);
+
     // Use session reuse if sessionId provided, otherwise start new session.
     let browser: any;
     let sessionId: string;
@@ -725,6 +740,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
         env.BROWSER,
         body.sessionId,
         body.url,
+        poolOptions,
       );
 
       if (!poolResult) {
@@ -773,6 +789,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
           env.BROWSER,
           undefined,
           body.url,
+          poolOptions,
         );
 
         if (!retryResult) {
@@ -882,7 +899,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
 
       // Release session back to pool so other requests can use it.
       if (usingPool) {
-        await releasePooledSession(env.BROWSER_SESSIONS, sessionId);
+        await releasePooledSession(env.BROWSER_SESSIONS, sessionId, poolOptions.keepAliveMs);
       }
 
       const duration = (Date.now() - startTime) / 1000;
@@ -927,7 +944,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
 
       // Release session back to pool even on error.
       if (usingPool) {
-        await releasePooledSession(env.BROWSER_SESSIONS, sessionId);
+        await releasePooledSession(env.BROWSER_SESSIONS, sessionId, poolOptions.keepAliveMs);
       }
 
       const duration = (Date.now() - startTime) / 1000;
@@ -998,6 +1015,8 @@ const securityHeaders = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    const poolOptions = parsePoolOptions(env);
 
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
@@ -1110,6 +1129,7 @@ export default {
           env.BROWSER,
           body.sessionId,
           body.url,
+          poolOptions,
         );
 
         if (!poolResult) {
@@ -1149,6 +1169,7 @@ export default {
           await releasePooledSession(
             env.BROWSER_SESSIONS,
             poolResult.sessionId,
+            poolOptions.keepAliveMs,
           );
 
           return new Response(JSON.stringify(data), {
@@ -1163,6 +1184,7 @@ export default {
           await releasePooledSession(
             env.BROWSER_SESSIONS,
             poolResult.sessionId,
+            poolOptions.keepAliveMs,
           );
 
           return new Response(
@@ -1195,6 +1217,9 @@ export default {
         const poolResult = await acquirePooledSession(
           env.BROWSER_SESSIONS,
           env.BROWSER,
+          undefined,
+          undefined,
+          poolOptions,
         );
 
         if (!poolResult) {
@@ -1237,6 +1262,9 @@ export default {
           const retryResult = await acquirePooledSession(
             env.BROWSER_SESSIONS,
             env.BROWSER,
+            undefined,
+            undefined,
+            poolOptions,
           );
 
           if (!retryResult) {
@@ -1493,7 +1521,7 @@ export default {
           });
 
           await page.close();
-          await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId);
+          await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId, poolOptions.keepAliveMs);
 
           console.log(
             `[PlaceDetails] Extracted: ${details.name} | coords={${details.lat}, ${details.lng}}`,
@@ -1511,7 +1539,7 @@ export default {
           console.error(`[PlaceDetails] Error: ${msg}`);
 
           await page.close();
-          await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId);
+          await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId, poolOptions.keepAliveMs);
 
           return new Response(
             JSON.stringify({ error: "Failed to extract place details" }),

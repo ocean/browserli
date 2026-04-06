@@ -14,5 +14,7 @@ declare namespace Cloudflare {
     API_RATE_LIMITER?: {
       limit: (opts: { key: string }) => Promise<{ success: boolean }>;
     };
+    BROWSER_MAX_SESSIONS?: string;
+    BROWSER_KEEP_ALIVE_MS?: string;
   }
 }

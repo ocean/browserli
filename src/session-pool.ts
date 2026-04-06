@@ -2,32 +2,31 @@
  * Browser Session Pool
  *
  * Manages a pool of Cloudflare Browser Rendering sessions using Workers KV.
- * Cloudflare limits accounts to 2 concurrent browser sessions, so this pool
- * tracks active sessions, reuses idle ones, and signals when the pool is full.
+ * The maximum concurrent sessions and keep-alive duration are configurable
+ * to support both free and paid Cloudflare plans.
  *
  * KV data model:
  * - Key: "session:<sessionId>"
  * - Value: JSON string of PooledSession
  * - Metadata: { status: "idle" | "busy" } for quick list-based querying
- * - TTL: 600 seconds (matches CF browser session ~10 min lifetime)
+ * - TTL: derived from keepAliveMs to match the browser's inactivity timeout
+ *
+ * Note on KV metadata consistency: KV list metadata can be up to 60 seconds
+ * stale. To guard against two Workers simultaneously reusing the same idle
+ * session, we re-read the full session value after finding an idle key in the
+ * list and verify the status is still "idle" before marking it busy.
  */
 
 import { acquire } from "@cloudflare/playwright";
 
-/** Maximum concurrent browser sessions allowed by Cloudflare. */
+/** Default maximum concurrent browser sessions (Cloudflare free plan limit). */
 export const MAX_CONCURRENT_SESSIONS = 2;
 
 /**
- * TTL for KV entries in seconds.
- *
- * Cloudflare browser sessions auto-close after 60 seconds of inactivity
- * (free plan default). Keeping the KV TTL for idle sessions at 55 seconds
- * means stale pool entries expire before the next request tries to reuse a
- * dead session. Busy session entries use a longer TTL since the browser is
- * actively being used.
+ * Minimum KV TTL in seconds (Cloudflare KV enforces a 60-second minimum).
+ * Used to clamp derived idle TTLs so KV doesn't reject the put.
  */
-const IDLE_SESSION_TTL_SECONDS = 60;
-const BUSY_SESSION_TTL_SECONDS = 120;
+const MIN_KV_TTL_SECONDS = 60;
 
 /** KV key prefix for session entries. */
 const SESSION_PREFIX = "session:";
@@ -46,8 +45,34 @@ export interface AcquireResult {
   reused: boolean;
 }
 
+export interface SessionPoolOptions {
+  /** Maximum concurrent sessions allowed. Defaults to MAX_CONCURRENT_SESSIONS. */
+  maxSessions?: number;
+  /**
+   * Browser keep-alive duration in milliseconds. Passed to acquire() and used
+   * to derive KV TTLs so stale pool entries expire in sync with the browser.
+   * Defaults to 60_000 ms (Cloudflare free plan default).
+   */
+  keepAliveMs?: number;
+}
+
 interface SessionMetadata {
   status: "idle" | "busy";
+}
+
+/**
+ * Compute KV TTLs from the browser keep-alive setting.
+ *
+ * - idleTtl: matches the browser inactivity timeout so stale entries don't
+ *   linger after Cloudflare kills the session.
+ * - busyTtl: double the keep-alive to cover active sessions that renew their
+ *   own inactivity timer through ongoing page interactions.
+ */
+function computeTtls(keepAliveMs: number): { idleTtl: number; busyTtl: number } {
+  const keepAliveSecs = Math.floor(keepAliveMs / 1000);
+  const idleTtl = Math.max(MIN_KV_TTL_SECONDS, keepAliveSecs);
+  const busyTtl = Math.max(MIN_KV_TTL_SECONDS * 2, keepAliveSecs * 2);
+  return { idleTtl, busyTtl };
 }
 
 /**
@@ -56,18 +81,14 @@ interface SessionMetadata {
 async function putSession(
   kv: KVNamespace,
   session: PooledSession,
+  keepAliveMs: number,
 ): Promise<void> {
   const key = `${SESSION_PREFIX}${session.sessionId}`;
   const metadata: SessionMetadata = { status: session.status };
-  // Idle sessions expire quickly to match Cloudflare's 60 s inactivity timeout,
-  // preventing dead sessions from lingering in the pool.
-  const ttl =
-    session.status === "idle" ? IDLE_SESSION_TTL_SECONDS : BUSY_SESSION_TTL_SECONDS;
+  const { idleTtl, busyTtl } = computeTtls(keepAliveMs);
+  const ttl = session.status === "idle" ? idleTtl : busyTtl;
 
-  await kv.put(key, JSON.stringify(session), {
-    expirationTtl: ttl,
-    metadata,
-  });
+  await kv.put(key, JSON.stringify(session), { expirationTtl: ttl, metadata });
 }
 
 /**
@@ -75,14 +96,17 @@ async function putSession(
  *
  * Cloudflare rate-limits session creation when multiple requests race.
  * Retrying with jitter breaks the synchronisation between concurrent callers.
+ * The keepAliveMs value is forwarded to acquire() so the browser session
+ * stays alive for the configured inactivity period.
  */
 async function acquireWithRetry(
   browserBinding: any,
+  keepAliveMs: number,
   maxAttempts = 3,
 ): Promise<{ sessionId: string }> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      return await acquire(browserBinding);
+      return await acquire(browserBinding, { keep_alive: keepAliveMs });
     } catch (error) {
       const isRateLimit =
         error instanceof Error && error.message.includes("429");
@@ -108,9 +132,13 @@ async function acquireWithRetry(
  * Logic:
  * 1. If requestedSessionId provided, look it up and mark busy.
  * 2. Otherwise, list all active sessions.
- * 3. If fewer than MAX exist, acquire a fresh one from Cloudflare.
- * 4. If MAX exist and one is idle, reuse it.
- * 5. If MAX exist and all are busy, return null (pool full).
+ * 3. If fewer than maxSessions exist, acquire a fresh one from Cloudflare.
+ * 4. If maxSessions exist and one is idle, reuse it.
+ * 5. If maxSessions exist and all are busy, return null (pool full).
+ *
+ * KV list metadata can be stale by ~60 s, so when reusing an idle session
+ * from the list we re-read the full value and verify it is still idle before
+ * claiming it, to avoid two Workers racing on the same session.
  *
  * Returns null when the pool is full — caller should return HTTP 503.
  */
@@ -119,7 +147,10 @@ export async function acquirePooledSession(
   browserBinding: any,
   requestedSessionId?: string,
   collectionUrl?: string,
+  options?: SessionPoolOptions,
 ): Promise<AcquireResult | null> {
+  const maxSessions = options?.maxSessions ?? MAX_CONCURRENT_SESSIONS;
+  const keepAliveMs = options?.keepAliveMs ?? 60_000;
   const now = new Date().toISOString();
 
   // Path 1: caller wants a specific session (pagination reuse).
@@ -132,7 +163,7 @@ export async function acquirePooledSession(
       session.status = "busy";
       session.lastUsedAt = now;
       if (collectionUrl) session.collectionUrl = collectionUrl;
-      await putSession(kv, session);
+      await putSession(kv, session, keepAliveMs);
 
       console.log(
         `[SessionPool] Reusing requested session ${requestedSessionId}`,
@@ -153,8 +184,8 @@ export async function acquirePooledSession(
   const activeKeys = listResult.keys;
 
   // If room in the pool, acquire a fresh session.
-  if (activeKeys.length < MAX_CONCURRENT_SESSIONS) {
-    const cfSession = await acquireWithRetry(browserBinding);
+  if (activeKeys.length < maxSessions) {
+    const cfSession = await acquireWithRetry(browserBinding, keepAliveMs);
     const sessionId = cfSession.sessionId;
 
     const session: PooledSession = {
@@ -164,29 +195,33 @@ export async function acquirePooledSession(
       lastUsedAt: now,
       collectionUrl,
     };
-    await putSession(kv, session);
+    await putSession(kv, session, keepAliveMs);
 
     console.log(`[SessionPool] Acquired new session ${sessionId}`);
     return { sessionId, reused: false };
   }
 
-  // Pool is full. Check if any session is idle.
-  const idleKey = activeKeys.find((k) => k.metadata?.status === "idle");
+  // Pool is full. Scan idle sessions from the list, re-reading each full value
+  // to confirm it is still idle (guards against stale KV list metadata).
+  for (const key of activeKeys) {
+    if (key.metadata?.status !== "idle") continue;
 
-  if (idleKey) {
-    const sessionId = idleKey.name.replace(SESSION_PREFIX, "");
-    const existing = await kv.get(idleKey.name);
+    const sessionId = key.name.replace(SESSION_PREFIX, "");
+    const existing = await kv.get(key.name);
+    if (!existing) continue;
 
-    if (existing) {
-      const session: PooledSession = JSON.parse(existing);
-      session.status = "busy";
-      session.lastUsedAt = now;
-      if (collectionUrl) session.collectionUrl = collectionUrl;
-      await putSession(kv, session);
+    const session: PooledSession = JSON.parse(existing);
 
-      console.log(`[SessionPool] Reusing idle session ${sessionId}`);
-      return { sessionId, reused: true };
-    }
+    // Stale metadata race: another Worker already claimed this session.
+    if (session.status !== "idle") continue;
+
+    session.status = "busy";
+    session.lastUsedAt = now;
+    if (collectionUrl) session.collectionUrl = collectionUrl;
+    await putSession(kv, session, keepAliveMs);
+
+    console.log(`[SessionPool] Reusing idle session ${sessionId}`);
+    return { sessionId, reused: true };
   }
 
   // All sessions are busy.
@@ -200,6 +235,7 @@ export async function acquirePooledSession(
 export async function releasePooledSession(
   kv: KVNamespace,
   sessionId: string,
+  keepAliveMs = 60_000,
 ): Promise<void> {
   const key = `${SESSION_PREFIX}${sessionId}`;
   const existing = await kv.get(key);
@@ -214,8 +250,7 @@ export async function releasePooledSession(
   const session: PooledSession = JSON.parse(existing);
   session.status = "idle";
   session.lastUsedAt = new Date().toISOString();
-  await putSession(kv, session);
-
+  await putSession(kv, session, keepAliveMs);
 }
 
 /**
