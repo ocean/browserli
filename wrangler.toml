@@ -14,6 +14,22 @@ usage_model = "unbound"
 BROWSER_MAX_SESSIONS = "8"
 BROWSER_KEEP_ALIVE_MS = "300000"
 
+# Logging for when on a paid plan.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
 [browser]
 binding = "BROWSER"
 
