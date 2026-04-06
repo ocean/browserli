@@ -2,9 +2,6 @@ name = "browserli"
 main = "src/index.ts"
 compatibility_date = "2026-02-05"
 compatibility_flags = ["nodejs_compat"]
-# Unbound removes the 30 s waitUntil cap, allowing browser sessions to stay
-# alive for the full BROWSER_KEEP_ALIVE_MS duration between requests.
-usage_model = "unbound"
 
 # Plan-tier configuration.
 # Adjust these to match the Cloudflare Browser Rendering plan in use.
