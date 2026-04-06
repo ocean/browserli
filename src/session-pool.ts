@@ -185,7 +185,51 @@ export async function acquirePooledSession(
 
   // If room in the pool, acquire a fresh session.
   if (activeKeys.length < maxSessions) {
-    const cfSession = await acquireWithRetry(browserBinding, keepAliveMs);
+    // Pre-acquire jitter: CF rate-limits new browser sessions to ~30/minute.
+    // When many Workers start simultaneously (e.g. bulk import), they all see a
+    // stale KV list showing room in the pool and race to call acquire().
+    // A random delay of 0–2 s spreads the burst. After waiting, we re-read the
+    // pool — a later Worker may find slots already filled and avoid acquiring.
+    const jitterMs = Math.floor(Math.random() * 2000);
+    await new Promise(r => setTimeout(r, jitterMs));
+
+    const freshList = await kv.list<SessionMetadata>({ prefix: SESSION_PREFIX });
+    const freshKeys = freshList.keys;
+
+    // Pool was filled during jitter — try to claim an idle session.
+    if (freshKeys.length >= maxSessions) {
+      for (const key of freshKeys) {
+        if (key.metadata?.status !== "idle") continue;
+        const sessionId = key.name.replace(SESSION_PREFIX, "");
+        const existing = await kv.get(key.name);
+        if (!existing) continue;
+        const session: PooledSession = JSON.parse(existing);
+        if (session.status !== "idle") continue;
+        session.status = "busy";
+        session.lastUsedAt = now;
+        if (collectionUrl) session.collectionUrl = collectionUrl;
+        await putSession(kv, session, keepAliveMs);
+        console.log(`[SessionPool] Reusing idle session ${sessionId} (post-jitter)`);
+        return { sessionId, reused: true };
+      }
+      // Pool is full and all sessions are busy.
+      return null;
+    }
+
+    // Pool still has room — acquire. Convert 429-exhausted errors to null
+    // (pool-full signal) so callers get a 503 and retry with backoff, rather
+    // than the Worker crashing with an unhandled exception.
+    let cfSession: { sessionId: string };
+    try {
+      cfSession = await acquireWithRetry(browserBinding, keepAliveMs);
+    } catch (acquireError) {
+      const msg = acquireError instanceof Error ? acquireError.message : String(acquireError);
+      if (msg.includes("429")) {
+        console.warn("[SessionPool] Rate limit exhausted acquiring session, treating pool as temporarily full");
+        return null;
+      }
+      throw acquireError;
+    }
     const sessionId = cfSession.sessionId;
 
     const session: PooledSession = {

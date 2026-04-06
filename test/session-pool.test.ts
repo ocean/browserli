@@ -197,21 +197,21 @@ describe("acquirePooledSession", () => {
       vi.useRealTimers();
     });
 
-    it("throws after exhausting all retries on repeated 429s", async () => {
+    it("returns null (pool-full signal) after exhausting all 429 retries", async () => {
       vi.useFakeTimers();
 
       mockAcquire.mockRejectedValue(
         new Error("Unable to create new browser: code: 429: message: Rate limit exceeded"),
       );
 
-      // Attach the rejection handler before advancing timers so the rejection
-      // is caught rather than becoming an unhandled promise rejection.
-      const assertion = expect(
-        acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER),
-      ).rejects.toThrow("429");
+      // Start the call and advance all timers (jitter + backoff delays).
+      const resultPromise = acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER);
       await vi.runAllTimersAsync();
-      await assertion;
+      const result = await resultPromise;
 
+      // Returns null so the caller receives a 503 and retries with its own backoff,
+      // rather than crashing the Worker with an unhandled exception.
+      expect(result).toBeNull();
       // 3 attempts total (initial + 2 retries).
       expect(mockAcquire).toHaveBeenCalledTimes(3);
 
@@ -219,13 +219,22 @@ describe("acquirePooledSession", () => {
     });
 
     it("does not retry on non-429 errors", async () => {
+      // Use fake timers to advance past the pre-acquire jitter instantly.
+      vi.useFakeTimers();
+
       mockAcquire.mockRejectedValue(new Error("Network error"));
 
-      await expect(
+      // Attach the rejection handler before advancing timers so the rejection
+      // is caught rather than becoming an unhandled promise rejection.
+      const assertion = expect(
         acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER),
       ).rejects.toThrow("Network error");
+      await vi.runAllTimersAsync();
+      await assertion;
 
       expect(mockAcquire).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
     });
   });
 });
