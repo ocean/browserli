@@ -17,8 +17,17 @@ import { acquire } from "@cloudflare/playwright";
 /** Maximum concurrent browser sessions allowed by Cloudflare. */
 export const MAX_CONCURRENT_SESSIONS = 2;
 
-/** TTL for KV entries in seconds. Matches CF browser session lifetime. */
-const SESSION_TTL_SECONDS = 600;
+/**
+ * TTL for KV entries in seconds.
+ *
+ * Cloudflare browser sessions auto-close after 60 seconds of inactivity
+ * (free plan default). Keeping the KV TTL for idle sessions at 55 seconds
+ * means stale pool entries expire before the next request tries to reuse a
+ * dead session. Busy session entries use a longer TTL since the browser is
+ * actively being used.
+ */
+const IDLE_SESSION_TTL_SECONDS = 55;
+const BUSY_SESSION_TTL_SECONDS = 120;
 
 /** KV key prefix for session entries. */
 const SESSION_PREFIX = "session:";
@@ -50,9 +59,13 @@ async function putSession(
 ): Promise<void> {
   const key = `${SESSION_PREFIX}${session.sessionId}`;
   const metadata: SessionMetadata = { status: session.status };
+  // Idle sessions expire quickly to match Cloudflare's 60 s inactivity timeout,
+  // preventing dead sessions from lingering in the pool.
+  const ttl =
+    session.status === "idle" ? IDLE_SESSION_TTL_SECONDS : BUSY_SESSION_TTL_SECONDS;
 
   await kv.put(key, JSON.stringify(session), {
-    expirationTtl: SESSION_TTL_SECONDS,
+    expirationTtl: ttl,
     metadata,
   });
 }
