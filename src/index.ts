@@ -1265,56 +1265,69 @@ export default {
             connectError instanceof Error
               ? connectError.message
               : String(connectError);
-          console.error(
-            `[PlaceDetails] Failed to connect to session ${poolSessionId}: ${msg}`,
-          );
 
-          // Dead session — clean up and retry once.
-          await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
-
-          const retryResult = await acquirePooledSession(
-            env.BROWSER_SESSIONS,
-            env.BROWSER,
-            undefined,
-            undefined,
-            poolOptions,
-          );
-
-          if (!retryResult) {
-            return new Response(
-              JSON.stringify({
-                error:
-                  "All browser sessions are currently busy. Please retry shortly.",
-                poolFull: true,
-              }),
-              {
-                status: 503,
-                headers: {
-                  "Content-Type": "application/json",
-                  "Retry-After": "10",
-                  ...corsHeaders,
-                },
-              },
-            );
+          // Reused sessions can hit a brief reconnect window just after the
+          // previous Worker called browser.close(). Wait 300 ms and try once
+          // more on the same session before declaring it dead.
+          if (poolResult.reused) {
+            await new Promise(r => setTimeout(r, 300));
+            try {
+              browser = await connect(env.BROWSER, poolSessionId);
+              console.log(`[PlaceDetails] Connected to session ${poolSessionId} after brief reconnect delay`);
+            } catch (_) {
+              // Fall through to dead-session removal below.
+            }
           }
 
-          poolSessionId = retryResult.sessionId;
-          try {
-            browser = await connect(env.BROWSER, poolSessionId);
-          } catch (retryConnectError) {
-            const retryMsg = retryConnectError instanceof Error
-              ? retryConnectError.message
-              : String(retryConnectError);
-            console.error(`[PlaceDetails] Failed to connect to retry session ${poolSessionId}: ${retryMsg}`);
+          if (!browser) {
+            // No reconnect succeeded — session is dead. Clean up and try again.
+            console.error(
+              `[PlaceDetails] Failed to connect to session ${poolSessionId}: ${msg}`,
+            );
             await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
-            return new Response(
-              JSON.stringify({ error: "Browser session unavailable. Please retry shortly.", poolFull: true }),
-              { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "10", ...corsHeaders } },
+
+            const retryResult = await acquirePooledSession(
+              env.BROWSER_SESSIONS,
+              env.BROWSER,
+              undefined,
+              undefined,
+              poolOptions,
             );
+
+            if (!retryResult) {
+              return new Response(
+                JSON.stringify({
+                  error:
+                    "All browser sessions are currently busy. Please retry shortly.",
+                  poolFull: true,
+                }),
+                {
+                  status: 503,
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Retry-After": "10",
+                    ...corsHeaders,
+                  },
+                },
+              );
+            }
+
+            poolSessionId = retryResult.sessionId;
+            try {
+              browser = await connect(env.BROWSER, poolSessionId);
+            } catch (retryConnectError) {
+              const retryMsg = retryConnectError instanceof Error
+                ? retryConnectError.message
+                : String(retryConnectError);
+              console.error(`[PlaceDetails] Failed to connect to retry session ${poolSessionId}: ${retryMsg}`);
+              await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
+              return new Response(
+                JSON.stringify({ error: "Browser session unavailable. Please retry shortly.", poolFull: true }),
+                { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "10", ...corsHeaders } },
+              );
+            }
+            console.log(`[PlaceDetails] Connected to retry session ${poolSessionId}`);
           }
-          console.log(
-            `[PlaceDetails] Connected to retry session ${poolSessionId}`,
-          );
         }
 
         const page = await browser.newPage();
