@@ -46,6 +46,8 @@ interface PlaceCard {
   savedAt?: number;   // Unix timestamp (seconds) when place was saved to the collection.
   kgId?: string;      // Google Knowledge Graph ID, e.g. "/g/11ltqq0zv9".
   photoUrl?: string;  // First photo thumbnail URL from the collection blob.
+  lat?: number;       // Latitude from collection blob (more reliable than page extraction).
+  lng?: number;       // Longitude from collection blob.
 }
 
 interface PageInfo {
@@ -225,6 +227,8 @@ interface CollectionPlaceData {
   savedAt?: number;
   kgId?: string;
   photoUrl?: string;
+  lat?: number;
+  lng?: number;
 }
 
 interface CollectionBlobResult {
@@ -302,8 +306,11 @@ async function extractCollectionBlobData(
         savedAt?: number;
         kgId?: string;
         photoUrl?: string;
+        lat?: number;
+        lng?: number;
       }> = [];
 
+      let firstEntry = true;
       for (const place of capturedData[1]) {
         const url = place?.[5];
         if (typeof url !== "string" || !url) continue;
@@ -311,6 +318,41 @@ async function extractCollectionBlobData(
         const savedAtRaw = place?.[45]?.[0];
         const kgIdRaw = place?.[37]?.[5];
         const photoUrlRaw = place?.[43]?.[0]?.[0];
+
+        // Coordinates: try common positions in the blob.
+        // Position [2][2][0]/[1] covers the most common Google Maps format;
+        // position [9][2][0]/[1] is an alternative seen in some versions.
+        let lat: number | undefined;
+        let lng: number | undefined;
+
+        const tryCoords = (rawLat: any, rawLng: any): boolean => {
+          if (rawLat == null || rawLng == null) return false;
+          const la = typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
+          const ln = typeof rawLng === "number" ? rawLng : parseFloat(rawLng);
+          if (!isNaN(la) && !isNaN(ln) && la >= -90 && la <= 90 && ln >= -180 && ln <= 180 && (la !== 0 || ln !== 0)) {
+            lat = la;
+            lng = ln;
+            return true;
+          }
+          return false;
+        };
+
+        tryCoords(place?.[2]?.[2]?.[0], place?.[2]?.[2]?.[1]) ||
+        tryCoords(place?.[9]?.[2]?.[0], place?.[9]?.[2]?.[1]) ||
+        tryCoords(place?.[2]?.[0]?.[0], place?.[2]?.[0]?.[1]);
+
+        // Log the shape of the first entry to help diagnose coordinate positions.
+        if (firstEntry) {
+          firstEntry = false;
+          const sample: Record<string, any> = {};
+          for (let i = 0; i < Math.min((place as any[]).length, 50); i++) {
+            const v = place[i];
+            if (v !== null && v !== undefined) {
+              sample[i] = typeof v === "object" ? JSON.stringify(v).slice(0, 80) : v;
+            }
+          }
+          console.log(`[DataImport] Blob sample entry (coords found: ${lat != null}): ${JSON.stringify(sample)}`);
+        }
 
         entries.push({
           url,
@@ -324,6 +366,8 @@ async function extractCollectionBlobData(
             typeof photoUrlRaw === "string" && photoUrlRaw
               ? photoUrlRaw
               : undefined,
+          lat,
+          lng,
         });
       }
 
@@ -338,6 +382,8 @@ async function extractCollectionBlobData(
         savedAt: entry.savedAt,
         kgId: entry.kgId,
         photoUrl: entry.photoUrl,
+        lat: entry.lat,
+        lng: entry.lng,
       });
     }
 
@@ -874,6 +920,8 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
             if (data.savedAt) place.savedAt = data.savedAt;
             if (data.kgId) place.kgId = data.kgId;
             if (data.photoUrl) place.photoUrl = data.photoUrl;
+            if (data.lat != null) place.lat = data.lat;
+            if (data.lng != null) place.lng = data.lng;
             matched++;
           }
         }
