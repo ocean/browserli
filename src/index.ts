@@ -319,44 +319,28 @@ async function extractCollectionBlobData(
         const kgIdRaw = place?.[37]?.[5];
         const photoUrlRaw = place?.[43]?.[0]?.[0];
 
-        // Coordinates: primary source is the place URL itself, which embeds
-        // /@lat,lng,zoom/ for most Google Maps place URLs — this is the most
-        // reliable extraction method and doesn't depend on blob array positions.
+        // Coordinates: extract from the data parameter's !8m2!3d{lat}!4d{lng} fragment.
+        // This encodes the actual place pin location set server-side by Google, and is
+        // completely independent of the map viewport or the browser's geo-detected location.
+        // The /@lat,lng,zoom/ portion of the URL is the VIEWPORT, not the pin — it reflects
+        // the Cloudflare data-centre location when running in Browser Rendering, so we must
+        // not use it.
         let lat: number | undefined;
         let lng: number | undefined;
         let coordSource = "none";
 
-        const coordFromUrl = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-        if (coordFromUrl) {
-          const la = parseFloat(coordFromUrl[1]);
-          const ln = parseFloat(coordFromUrl[2]);
+        const dataParamMatch = url.match(/!8m2!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+        if (dataParamMatch) {
+          const la = parseFloat(dataParamMatch[1]);
+          const ln = parseFloat(dataParamMatch[2]);
           if (!isNaN(la) && !isNaN(ln) && (la !== 0 || ln !== 0)) {
             lat = la;
             lng = ln;
-            coordSource = "url";
+            coordSource = "data-param";
           }
         }
 
-        // Fallback: try common blob array positions when the URL has no coords.
-        const tryCoords = (rawLat: any, rawLng: any, source: string): boolean => {
-          if (lat != null || rawLat == null || rawLng == null) return false;
-          const la = typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
-          const ln = typeof rawLng === "number" ? rawLng : parseFloat(rawLng);
-          if (!isNaN(la) && !isNaN(ln) && la >= -90 && la <= 90 && ln >= -180 && ln <= 180 && (la !== 0 || ln !== 0)) {
-            lat = la;
-            lng = ln;
-            coordSource = source;
-            return true;
-          }
-          return false;
-        };
-
-        tryCoords(place?.[2]?.[2]?.[0], place?.[2]?.[2]?.[1], "blob[2][2]") ||
-        tryCoords(place?.[9]?.[2]?.[0], place?.[9]?.[2]?.[1], "blob[9][2]") ||
-        tryCoords(place?.[14]?.[0]?.[0]?.[1], place?.[14]?.[0]?.[0]?.[2], "blob[14]") ||
-        tryCoords(place?.[2]?.[0]?.[0], place?.[2]?.[0]?.[1], "blob[2][0]");
-
-        // Log the shape of the first entry to help diagnose coordinate positions.
+        // Log the shape of the first entry to help diagnose any remaining issues.
         if (firstEntry) {
           firstEntry = false;
           const sample: Record<string, any> = {};
@@ -1393,13 +1377,25 @@ export default {
           }
         }
 
+        // Extract coordinates from the URL's data parameter BEFORE page navigation.
+        // The !8m2!3d{lat}!4d{lng} fragment is set server-side by Google and encodes
+        // the actual place pin location. It is completely independent of the browser
+        // viewport or the Cloudflare data-centre geo-detected location, which causes
+        // the /@lat,lng/zoom/ viewport portion of the URL to be wrong (Sydney) when
+        // running in Cloudflare Browser Rendering.
+        const urlDataParamMatch = placeUrl!.match(/!8m2!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+        const urlDataLat = urlDataParamMatch ? parseFloat(urlDataParamMatch[1]) : null;
+        const urlDataLng = urlDataParamMatch ? parseFloat(urlDataParamMatch[2]) : null;
+        if (urlDataLat !== null) {
+          console.log(`[PlaceDetails] Coords from URL data param: ${urlDataLat}, ${urlDataLng}`);
+        }
+
         const page = await browser.newPage();
 
         try {
-          // Strip @lat,lng,zoom/ from the URL to avoid inheriting stale viewport
-          // coordinates from the collection page. This forces Google Maps to
-          // recentre on the actual place location.
-          const cleanUrl = placeUrl.replace(
+          // Strip @lat,lng,zoom/ from the URL to prevent the browser inheriting
+          // stale viewport coordinates from a previous session visit.
+          const cleanUrl = placeUrl!.replace(
             /\/@-?\d+\.?\d*,-?\d+\.?\d*,\d+\.?\d*z\//,
             "/",
           );
@@ -1412,98 +1408,45 @@ export default {
           // Wait for place panel to load.
           await page.waitForSelector("h1", { timeout: 10000 });
 
-          // Wait for the URL to update with coordinates.
-          try {
-            await page.waitForURL(/@-?\d+\.\d+,-?\d+\.\d+/, { timeout: 8000 });
-          } catch (_) {
-            console.log(
-              "[PlaceDetails] URL did not update with coordinates, will try DOM fallback",
-            );
-          }
-
           // Brief settle delay to ensure secondary elements (status badges,
           // review counts) have rendered after the main content loads.
-          await page.waitForTimeout(500);
+          await page.waitForTimeout(1000);
 
-          const details = await page.evaluate(() => {
+          const details = await page.evaluate((preExtractedLat: number | null, preExtractedLng: number | null) => {
             const url = window.location.href;
-            let lat: number | null = null;
-            let lng: number | null = null;
 
-            // 1. JSON-LD structured data — server-rendered, contains the actual
-            //    pin coordinates rather than the browser viewport centre.
-            const jsonLdScripts = document.querySelectorAll(
-              'script[type="application/ld+json"]',
-            );
-            for (const script of jsonLdScripts) {
-              try {
-                const data = JSON.parse(script.textContent || "");
-                // Handle both top-level geo and nested location.geo.
-                const geo = data?.geo ?? data?.location?.geo;
-                const rawLat = geo?.latitude;
-                const rawLng = geo?.longitude;
-                if (rawLat != null && rawLng != null) {
-                  const parsedLat =
-                    typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
-                  const parsedLng =
-                    typeof rawLng === "number" ? rawLng : parseFloat(rawLng);
-                  if (!isNaN(parsedLat) && !isNaN(parsedLng)) {
-                    lat = parsedLat;
-                    lng = parsedLng;
-                    break;
-                  }
-                }
-              } catch (_) {
-                // Ignore malformed JSON-LD.
-              }
-            }
+            // Use pre-extracted coordinates from the URL data parameter when available —
+            // these are authoritative place pin coords that don't depend on page state.
+            let lat: number | null = preExtractedLat;
+            let lng: number | null = preExtractedLng;
 
-            // 2. og:image static map — centred on the actual pin location,
-            //    not affected by the info-panel viewport shift.
+            // Fallback: try to extract from JSON-LD structured data. This is only
+            // present on initial server-rendered loads, not SPA navigations, but is
+            // worth attempting when the URL had no data parameter.
             if (lat === null || lng === null) {
-              const ogImage = (
-                document.querySelector(
-                  'meta[property="og:image"]',
-                ) as HTMLMetaElement
-              )?.content;
-              if (ogImage) {
-                const m = ogImage.match(
-                  /center=(-?\d+\.\d+)%2C(-?\d+\.\d+)/,
-                );
-                if (m) {
-                  lat = parseFloat(m[1]);
-                  lng = parseFloat(m[2]);
-                }
-              }
-            }
-
-            // 3. Canonical link — server-set, more likely to reflect pin coords
-            //    than the runtime URL which shifts due to the info panel.
-            if (lat === null || lng === null) {
-              const canonical = (
-                document.querySelector(
-                  'link[rel="canonical"]',
-                ) as HTMLLinkElement
-              )?.href;
-              if (canonical) {
-                const m = canonical.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-                if (m) {
-                  lat = parseFloat(m[1]);
-                  lng = parseFloat(m[2]);
-                }
-              }
-            }
-
-            // 4. Last resort: URL viewport centre. This is shifted ~200 m west
-            //    of the actual pin because Google Maps offsets the map to keep
-            //    the pin centred in the visible area beside the info panel.
-            if (lat === null || lng === null) {
-              const coordMatch = url.match(
-                /@(-?\d+\.\d+),(-?\d+\.\d+),(\d+\.?\d*)z/,
+              const jsonLdScripts = document.querySelectorAll(
+                'script[type="application/ld+json"]',
               );
-              if (coordMatch) {
-                lat = parseFloat(coordMatch[1]);
-                lng = parseFloat(coordMatch[2]);
+              for (const script of jsonLdScripts) {
+                try {
+                  const data = JSON.parse(script.textContent || "");
+                  const geo = data?.geo ?? data?.location?.geo;
+                  const rawLat = geo?.latitude;
+                  const rawLng = geo?.longitude;
+                  if (rawLat != null && rawLng != null) {
+                    const parsedLat =
+                      typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
+                    const parsedLng =
+                      typeof rawLng === "number" ? rawLng : parseFloat(rawLng);
+                    if (!isNaN(parsedLat) && !isNaN(parsedLng)) {
+                      lat = parsedLat;
+                      lng = parsedLng;
+                      break;
+                    }
+                  }
+                } catch (_) {
+                  // Ignore malformed JSON-LD.
+                }
               }
             }
 
@@ -1619,7 +1562,7 @@ export default {
               status,
               google_maps_url: url.split("?")[0],
             };
-          });
+          }, urlDataLat, urlDataLng);
 
           await page.close();
           // Explicitly disconnect from the browser before returning.
