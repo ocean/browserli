@@ -1445,7 +1445,7 @@ export default {
           // have rendered after the main content loads.
           await page.waitForTimeout(500);
 
-          const details = await page.evaluate((preExtractedLat: number | null, preExtractedLng: number | null) => {
+          const details = await page.evaluate(({ preExtractedLat, preExtractedLng }: { preExtractedLat: number | null, preExtractedLng: number | null }) => {
             const url = window.location.href;
 
             // Use pre-resolved coordinates from the URL data parameter when available.
@@ -1593,7 +1593,7 @@ export default {
               status,
               google_maps_url: url.split("?")[0],
             };
-          }, coordLat, coordLng);
+          }, { preExtractedLat: coordLat, preExtractedLng: coordLng });
 
           await page.close();
           // Explicitly disconnect from the browser before returning.
