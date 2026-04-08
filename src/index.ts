@@ -319,27 +319,42 @@ async function extractCollectionBlobData(
         const kgIdRaw = place?.[37]?.[5];
         const photoUrlRaw = place?.[43]?.[0]?.[0];
 
-        // Coordinates: try common positions in the blob.
-        // Position [2][2][0]/[1] covers the most common Google Maps format;
-        // position [9][2][0]/[1] is an alternative seen in some versions.
+        // Coordinates: primary source is the place URL itself, which embeds
+        // /@lat,lng,zoom/ for most Google Maps place URLs — this is the most
+        // reliable extraction method and doesn't depend on blob array positions.
         let lat: number | undefined;
         let lng: number | undefined;
+        let coordSource = "none";
 
-        const tryCoords = (rawLat: any, rawLng: any): boolean => {
-          if (rawLat == null || rawLng == null) return false;
+        const coordFromUrl = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+        if (coordFromUrl) {
+          const la = parseFloat(coordFromUrl[1]);
+          const ln = parseFloat(coordFromUrl[2]);
+          if (!isNaN(la) && !isNaN(ln) && (la !== 0 || ln !== 0)) {
+            lat = la;
+            lng = ln;
+            coordSource = "url";
+          }
+        }
+
+        // Fallback: try common blob array positions when the URL has no coords.
+        const tryCoords = (rawLat: any, rawLng: any, source: string): boolean => {
+          if (lat != null || rawLat == null || rawLng == null) return false;
           const la = typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
           const ln = typeof rawLng === "number" ? rawLng : parseFloat(rawLng);
           if (!isNaN(la) && !isNaN(ln) && la >= -90 && la <= 90 && ln >= -180 && ln <= 180 && (la !== 0 || ln !== 0)) {
             lat = la;
             lng = ln;
+            coordSource = source;
             return true;
           }
           return false;
         };
 
-        tryCoords(place?.[2]?.[2]?.[0], place?.[2]?.[2]?.[1]) ||
-        tryCoords(place?.[9]?.[2]?.[0], place?.[9]?.[2]?.[1]) ||
-        tryCoords(place?.[2]?.[0]?.[0], place?.[2]?.[0]?.[1]);
+        tryCoords(place?.[2]?.[2]?.[0], place?.[2]?.[2]?.[1], "blob[2][2]") ||
+        tryCoords(place?.[9]?.[2]?.[0], place?.[9]?.[2]?.[1], "blob[9][2]") ||
+        tryCoords(place?.[14]?.[0]?.[0]?.[1], place?.[14]?.[0]?.[0]?.[2], "blob[14]") ||
+        tryCoords(place?.[2]?.[0]?.[0], place?.[2]?.[0]?.[1], "blob[2][0]");
 
         // Log the shape of the first entry to help diagnose coordinate positions.
         if (firstEntry) {
@@ -348,10 +363,10 @@ async function extractCollectionBlobData(
           for (let i = 0; i < Math.min((place as any[]).length, 50); i++) {
             const v = place[i];
             if (v !== null && v !== undefined) {
-              sample[i] = typeof v === "object" ? JSON.stringify(v).slice(0, 80) : v;
+              sample[i] = typeof v === "object" ? JSON.stringify(v).slice(0, 120) : v;
             }
           }
-          console.log(`[DataImport] Blob sample entry (coords found: ${lat != null}): ${JSON.stringify(sample)}`);
+          console.log(`[DataImport] Blob sample entry (coords: ${lat != null ? `${lat},${lng} via ${coordSource}` : "none"}): ${JSON.stringify(sample)}`);
         }
 
         entries.push({
