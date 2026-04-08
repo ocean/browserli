@@ -1393,10 +1393,11 @@ export default {
         const page = await browser.newPage();
 
         try {
-          // Strip @lat,lng,zoom/ from the URL to prevent the browser inheriting
-          // stale viewport coordinates from a previous session visit.
+          // Strip /@lat,lng,zoom/ from the URL to prevent the browser inheriting
+          // a stale viewport from a previous session visit. Handles both z (zoom level)
+          // and m (metres above ground) suffix formats.
           const cleanUrl = placeUrl!.replace(
-            /\/@-?\d+\.?\d*,-?\d+\.?\d*,\d+\.?\d*z\//,
+            /\/@-?\d+\.?\d*,-?\d+\.?\d*,\d+\.?\d*[mz]\//,
             "/",
           );
           console.log(`[PlaceDetails] Navigating to: ${cleanUrl}`);
@@ -1405,24 +1406,54 @@ export default {
             timeout: 20000,
           });
 
-          // Wait for place panel to load.
+          // Wait for the place panel heading to appear.
           await page.waitForSelector("h1", { timeout: 10000 });
 
-          // Brief settle delay to ensure secondary elements (status badges,
-          // review counts) have rendered after the main content loads.
-          await page.waitForTimeout(1000);
+          // Resolve pin coordinates — prefer the URL data parameter over any
+          // DOM-extracted source, as it is set server-side by Google and is
+          // independent of the Cloudflare data-centre geo-detected location
+          // (which contaminates the /@lat,lng/ viewport portion of the URL).
+          //
+          // Collection place URLs are short CID-only URLs (no !8m2!3d yet):
+          //   /maps/place/Name/data=!4m2!3m1!1s0x{cid}
+          // Google Maps resolves the CID and rewrites the URL to the full form:
+          //   /maps/place/Name/@{lat},{lng},{zoom}/data=...!8m2!3d{lat}!4d{lng}...
+          // We wait for that rewrite to capture the authoritative pin coordinates.
+          let coordLat: number | null = urlDataLat;
+          let coordLng: number | null = urlDataLng;
+
+          if (coordLat === null) {
+            try {
+              // Wait up to 15 s for Google Maps to resolve the CID and populate
+              // the data parameter with the place pin coordinates.
+              await page.waitForURL(/!8m2!3d/, { timeout: 15000 });
+              const resolvedUrl = page.url();
+              const m = resolvedUrl.match(/!8m2!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+              if (m) {
+                coordLat = parseFloat(m[1]);
+                coordLng = parseFloat(m[2]);
+                console.log(`[PlaceDetails] Coords from resolved URL data param: ${coordLat}, ${coordLng}`);
+              }
+            } catch (_) {
+              console.log("[PlaceDetails] URL did not update with data param coords, falling back to JSON-LD");
+            }
+          } else {
+            console.log(`[PlaceDetails] Coords from original URL data param: ${coordLat}, ${coordLng}`);
+          }
+
+          // Brief settle delay to ensure secondary elements (address, status)
+          // have rendered after the main content loads.
+          await page.waitForTimeout(500);
 
           const details = await page.evaluate((preExtractedLat: number | null, preExtractedLng: number | null) => {
             const url = window.location.href;
 
-            // Use pre-extracted coordinates from the URL data parameter when available —
-            // these are authoritative place pin coords that don't depend on page state.
+            // Use pre-resolved coordinates from the URL data parameter when available.
             let lat: number | null = preExtractedLat;
             let lng: number | null = preExtractedLng;
 
-            // Fallback: try to extract from JSON-LD structured data. This is only
-            // present on initial server-rendered loads, not SPA navigations, but is
-            // worth attempting when the URL had no data parameter.
+            // Fallback: JSON-LD structured data. Only present on initial server-rendered
+            // loads, not SPA navigations, but worth attempting when data param is absent.
             if (lat === null || lng === null) {
               const jsonLdScripts = document.querySelectorAll(
                 'script[type="application/ld+json"]',
@@ -1562,7 +1593,7 @@ export default {
               status,
               google_maps_url: url.split("?")[0],
             };
-          }, urlDataLat, urlDataLng);
+          }, coordLat, coordLng);
 
           await page.close();
           // Explicitly disconnect from the browser before returning.
