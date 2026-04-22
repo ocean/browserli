@@ -93,10 +93,9 @@ When deploying to production:
 
 ## Rate Limiting
 
-Currently, Browserli has no built-in rate limiting. Consider adding:
+Browserli uses the Cloudflare Workers Rate Limiting API (configured in `wrangler.toml`):
 
-- Cloudflare Workers Rate Limiting API
-- Per-key rate limits in a KV store
-- Request queuing via Durable Objects
-
-This can be added in a future release if needed.
+- **Limit**: 300 requests per 60 seconds per IP
+- **Key**: `CF-Connecting-IP` header (injected by Cloudflare, not spoofable)
+- **Response**: HTTP 429 with `Retry-After: 60` header
+- Applied to all endpoints except `GET /`
