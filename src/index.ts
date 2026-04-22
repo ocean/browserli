@@ -9,13 +9,13 @@ import {
 } from "./session-pool";
 
 /** Parse plan-tier pool options from wrangler env vars. */
-function parsePoolOptions(env: Env): SessionPoolOptions {
+export function parsePoolOptions(env: Env): SessionPoolOptions {
   return {
     maxSessions: parseInt(env.BROWSER_MAX_SESSIONS ?? "2", 10),
     keepAliveMs: parseInt(env.BROWSER_KEEP_ALIVE_MS ?? "60000", 10),
   };
 }
-import { isValidGoogleMapsUrl, timingSafeEqual, validateApiKey } from "./utils";
+import { isValidGoogleMapsUrl, validateApiKey } from "./utils";
 
 interface Env {
   BROWSER: any;
@@ -43,11 +43,11 @@ interface PlaceCard {
   rating?: number;
   reviewCount?: number;
   note?: string;
-  savedAt?: number;   // Unix timestamp (seconds) when place was saved to the collection.
-  kgId?: string;      // Google Knowledge Graph ID, e.g. "/g/11ltqq0zv9".
-  photoUrl?: string;  // First photo thumbnail URL from the collection blob.
-  lat?: number;       // Latitude from collection blob (more reliable than page extraction).
-  lng?: number;       // Longitude from collection blob.
+  savedAt?: number; // Unix timestamp (seconds) when place was saved to the collection.
+  kgId?: string; // Google Knowledge Graph ID, e.g. "/g/11ltqq0zv9".
+  photoUrl?: string; // First photo thumbnail URL from the collection blob.
+  lat?: number; // Latitude from collection blob (more reliable than page extraction).
+  lng?: number; // Longitude from collection blob.
 }
 
 interface PageInfo {
@@ -81,8 +81,6 @@ interface DataImportResponse {
 const ITEMS_PER_PAGE = 200;
 const PAGE_LOAD_TIMEOUT = 30000; // 30 seconds for initial page load
 const NAVIGATION_TIMEOUT = 30000; // 30 seconds for pagination clicks
-const POLL_INTERVAL = 500; // ms between polls during pagination
-
 
 /**
  * Handle root page - shows broccoli emoji.
@@ -159,8 +157,7 @@ function handleRoot(): Response {
     status: 200,
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy":
-        "default-src 'self'; style-src 'unsafe-inline'",
+      "Content-Security-Policy": "default-src 'self'; style-src 'unsafe-inline'",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY",
       "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
@@ -172,9 +169,7 @@ function handleRoot(): Response {
  * Capture debug information about the page structure.
  * Returns raw HTML and DOM analysis for troubleshooting selectors.
  */
-async function captureDebugInfo(
-  page: any,
-): Promise<{ htmlContent: string; domStructure: string }> {
+async function captureDebugInfo(page: any): Promise<{ htmlContent: string; domStructure: string }> {
   try {
     const [htmlContent, domStructure] = await page.evaluate(() => {
       const html = document.documentElement.outerHTML;
@@ -199,11 +194,9 @@ async function captureDebugInfo(
         allLinks: document.querySelectorAll("a").length,
         mapsPlaceLinks: placeLinks.length,
         containers: {
-          dataItemIdContainers:
-            document.querySelectorAll("[data-item-id]").length,
+          dataItemIdContainers: document.querySelectorAll("[data-item-id]").length,
           roleHeadings: document.querySelectorAll('[role="heading"]').length,
-          roleNavigations: document.querySelectorAll('[role="navigation"]')
-            .length,
+          roleNavigations: document.querySelectorAll('[role="navigation"]').length,
           buttons: document.querySelectorAll("button").length,
         },
         samplePlaceLinks,
@@ -255,9 +248,7 @@ interface CollectionBlobResult {
  *
  * Returns a Map of normalised URL → CollectionPlaceData, plus collection metadata.
  */
-async function extractCollectionBlobData(
-  page: any,
-): Promise<CollectionBlobResult> {
+async function extractCollectionBlobData(page: any): Promise<CollectionBlobResult> {
   try {
     const extracted: {
       entries: Array<{
@@ -265,6 +256,8 @@ async function extractCollectionBlobData(
         savedAt?: number;
         kgId?: string;
         photoUrl?: string;
+        lat?: number;
+        lng?: number;
       }>;
       totalCount?: number;
       collectionId?: string;
@@ -282,7 +275,7 @@ async function extractCollectionBlobData(
 
       try {
         new Function(script.textContent || "")();
-      } catch (_) {
+      } catch {
         return { entries: [] };
       }
 
@@ -294,12 +287,9 @@ async function extractCollectionBlobData(
 
       // Collection-level metadata.
       const meta = capturedData[13];
-      const totalCount =
-        typeof meta?.[3] === "number" ? meta[3] : undefined;
-      const collectionId =
-        typeof meta?.[0] === "string" ? meta[0] : undefined;
-      const collectionName =
-        typeof meta?.[2] === "string" ? meta[2] : undefined;
+      const totalCount = typeof meta?.[3] === "number" ? meta[3] : undefined;
+      const collectionId = typeof meta?.[0] === "string" ? meta[0] : undefined;
+      const collectionName = typeof meta?.[2] === "string" ? meta[2] : undefined;
 
       const entries: Array<{
         url: string;
@@ -350,21 +340,16 @@ async function extractCollectionBlobData(
               sample[i] = typeof v === "object" ? JSON.stringify(v).slice(0, 120) : v;
             }
           }
-          console.log(`[DataImport] Blob sample entry (coords: ${lat != null ? `${lat},${lng} via ${coordSource}` : "none"}): ${JSON.stringify(sample)}`);
+          console.log(
+            `[DataImport] Blob sample entry (coords: ${lat != null ? `${lat},${lng} via ${coordSource}` : "none"}): ${JSON.stringify(sample)}`,
+          );
         }
 
         entries.push({
           url,
-          savedAt:
-            typeof savedAtRaw === "number" && savedAtRaw > 0
-              ? savedAtRaw
-              : undefined,
-          kgId:
-            typeof kgIdRaw === "string" && kgIdRaw ? kgIdRaw : undefined,
-          photoUrl:
-            typeof photoUrlRaw === "string" && photoUrlRaw
-              ? photoUrlRaw
-              : undefined,
+          savedAt: typeof savedAtRaw === "number" && savedAtRaw > 0 ? savedAtRaw : undefined,
+          kgId: typeof kgIdRaw === "string" && kgIdRaw ? kgIdRaw : undefined,
+          photoUrl: typeof photoUrlRaw === "string" && photoUrlRaw ? photoUrlRaw : undefined,
           lat,
           lng,
         });
@@ -386,9 +371,7 @@ async function extractCollectionBlobData(
       });
     }
 
-    console.log(
-      `[DataImport] Extracted ${map.size} place records from AF_initDataCallback blob`,
-    );
+    console.log(`[DataImport] Extracted ${map.size} place records from AF_initDataCallback blob`);
 
     return {
       places: map,
@@ -406,7 +389,7 @@ async function extractCollectionBlobData(
  * Build a URL with the given pageNumber query parameter for direct page navigation.
  * Google Collections supports ?pageNumber=N (1-indexed) for stable pagination.
  */
-function addPageNumberToUrl(baseUrl: string, pageNum: number): string {
+export function addPageNumberToUrl(baseUrl: string, pageNum: number): string {
   try {
     const url = new URL(baseUrl);
     url.searchParams.set("pageNumber", String(pageNum + 1));
@@ -422,7 +405,7 @@ function addPageNumberToUrl(baseUrl: string, pageNum: number): string {
  * Strips query strings and decodes unicode escapes so URLs from the
  * AF_initDataCallback blob can be matched against DOM-scraped hrefs.
  */
-function normaliseGoogleMapsUrl(url: string): string {
+export function normaliseGoogleMapsUrl(url: string): string {
   try {
     // Decode any unicode escapes (e.g. \u003d → =).
     const decoded = url.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
@@ -448,9 +431,7 @@ async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]> {
       // Google Maps collection places: look for links with class "ir" (text-based cards)
       // Important: we only extract from the current page viewport, not deduplicating across pages
       // This ensures pagination works correctly
-      const placeLinks = document.querySelectorAll(
-        'a[href*="/maps/place/"][class*="ir"]',
-      );
+      const placeLinks = document.querySelectorAll('a[href*="/maps/place/"][class*="ir"]');
 
       placeLinks.forEach((link) => {
         try {
@@ -472,9 +453,7 @@ async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]> {
             if (match[3]) {
               const countStr = match[3];
               if (countStr.endsWith("K")) {
-                reviewCount = Math.round(
-                  parseFloat(countStr.slice(0, -1)) * 1000,
-                );
+                reviewCount = Math.round(parseFloat(countStr.slice(0, -1)) * 1000);
               } else {
                 reviewCount = parseInt(countStr);
               }
@@ -501,8 +480,8 @@ async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]> {
           }
 
           placeCards.push({ name, url: href, rating, reviewCount, note });
-        } catch (e) {
-          // Silently skip malformed entries
+        } catch {
+          // Silently skip malformed entries.
         }
       });
 
@@ -520,9 +499,7 @@ async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]> {
  * Get pagination info from current page.
  * Returns total count and whether next page is available.
  */
-async function getPaginationInfo(
-  page: any,
-): Promise<{ total: number; hasNext: boolean }> {
+async function getPaginationInfo(page: any): Promise<{ total: number; hasNext: boolean }> {
   try {
     return await page.evaluate(() => {
       // Look for pagination text like "1-200 of 237"
@@ -562,89 +539,6 @@ async function getPaginationInfo(
 }
 
 /**
- * Click the next button to navigate to the next page.
- */
-async function goToNextPage(page: any): Promise<boolean> {
-  try {
-    // Use evaluate() for all DOM interaction so it works with both
-    // the local HTTP proxy and real Playwright page objects.
-    const buttonStatus = await page.evaluate(() => {
-      const btn = document.querySelector(
-        'button[aria-label*="Next page"], button[aria-label*="next"]',
-      ) as HTMLButtonElement | null;
-      if (!btn) return "not_found";
-      if (btn.disabled) return "disabled";
-      return "ready";
-    });
-
-    if (buttonStatus === "not_found") {
-      console.log("[DataImport] No next button found");
-      return false;
-    }
-
-    if (buttonStatus === "disabled") {
-      console.log("[DataImport] Next button is disabled");
-      return false;
-    }
-
-    console.log("[DataImport] Clicking next button...");
-
-    // Get initial place count and click in one evaluate call
-    const initialCount = await page.evaluate(() => {
-      const count = document.querySelectorAll(
-        'a[href*="/maps/place/"][class*="ir"]',
-      ).length;
-      const btn = document.querySelector(
-        'button[aria-label*="Next page"], button[aria-label*="next"]',
-      ) as HTMLButtonElement | null;
-      if (btn) btn.click();
-      return count;
-    });
-    console.log(`[DataImport] Initial card count: ${initialCount}`);
-
-    // Wait for the page to load new content by polling for DOM changes
-    let pageChanged = false;
-    let attempts = 0;
-    const maxAttempts = Math.ceil(NAVIGATION_TIMEOUT / POLL_INTERVAL);
-
-    while (!pageChanged && attempts < maxAttempts) {
-      await page.waitForTimeout(POLL_INTERVAL);
-
-      const currentCount = await page.evaluate(() => {
-        return document.querySelectorAll('a[href*="/maps/place/"][class*="ir"]')
-          .length;
-      });
-
-      // Page has changed if the count is different (new content loaded)
-      if (currentCount !== initialCount) {
-        pageChanged = true;
-        console.log(
-          `[DataImport] Page changed detected. Old count: ${initialCount}, New count: ${currentCount}`,
-        );
-      }
-
-      attempts++;
-    }
-
-    if (!pageChanged) {
-      console.log(
-        "[DataImport] Warning: page did not change after clicking next button",
-      );
-    }
-
-    // Scroll to top to ensure we're at the start of the new page
-    await page.evaluate(() => {
-      window.scrollTo(0, 0);
-    });
-
-    return true;
-  } catch (error) {
-    console.error("[DataImport] Error navigating to next page:", error);
-    return false;
-  }
-}
-
-/**
  * Data import handler - extracts place URLs from a Google Maps collection.
  * Handles pagination and returns batches of places.
  */
@@ -669,8 +563,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
       return new Response(
         JSON.stringify({
           success: false,
-          error:
-            "Invalid URL: must be a valid Google Maps collection or place URL",
+          error: "Invalid URL: must be a valid Google Maps collection or place URL",
         }),
         { status: 400, headers: { "Content-Type": "application/json" } },
       );
@@ -694,12 +587,9 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
       // Local development: use HTTP proxy to local Playwright server
       // This avoids any Node.js module imports in the Worker context
       // Default to HTTP API server on port 3001 (not the WebSocket port 3000)
-      const playwrightServerUrl =
-        env.PLAYWRIGHT_SERVER_URL || "http://localhost:3001";
+      const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL || "http://localhost:3001";
 
-      console.log(
-        `[DataImport] Connecting to local Playwright server: ${playwrightServerUrl}`,
-      );
+      console.log(`[DataImport] Connecting to local Playwright server: ${playwrightServerUrl}`);
 
       try {
         // Create a simple HTTP-based browser proxy that uses fetch
@@ -716,14 +606,11 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
               _serverUrl: playwrightServerUrl,
               _sessionId: sessionId,
               async goto(url: string, options: any) {
-                const response = await fetch(
-                  `${playwrightServerUrl}/api/page/goto`,
-                  {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ url, options, sessionId }),
-                  },
-                );
+                const response = await fetch(`${playwrightServerUrl}/api/page/goto`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ url, options, sessionId }),
+                });
                 if (!response.ok) {
                   throw new Error(`Failed to navigate to ${url}`);
                 }
@@ -731,19 +618,16 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
                 return data;
               },
               async evaluate(fn: Function) {
-                const response = await fetch(
-                  `${playwrightServerUrl}/api/page/evaluate`,
-                  {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ script: fn.toString(), sessionId }),
-                  },
-                );
+                const response = await fetch(`${playwrightServerUrl}/api/page/evaluate`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ script: fn.toString(), sessionId }),
+                });
                 if (!response.ok) {
-                  const error = await response.json() as { error: string };
+                  const error = (await response.json()) as { error: string };
                   throw new Error(`Failed to evaluate script: ${error.error}`);
                 }
-                const data = await response.json() as { result: unknown };
+                const data = (await response.json()) as { result: unknown };
                 return data.result;
               },
               async waitForTimeout(ms: number) {
@@ -765,14 +649,10 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
             // Close browser
           },
         };
-        console.log(
-          `[DataImport] Connected to local Playwright server (HTTP proxy: ${sessionId})`,
-        );
+        console.log(`[DataImport] Connected to local Playwright server (HTTP proxy: ${sessionId})`);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        console.error(
-          `[DataImport] Failed to connect to local Playwright: ${msg}`,
-        );
+        console.error(`[DataImport] Failed to connect to local Playwright: ${msg}`);
         throw new Error(
           `Cannot connect to local Playwright server at ${playwrightServerUrl}. ` +
             `Make sure it's running: npm run playwright:server`,
@@ -793,8 +673,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
         return new Response(
           JSON.stringify({
             success: false,
-            error:
-              "All browser sessions are currently busy. Please retry shortly.",
+            error: "All browser sessions are currently busy. Please retry shortly.",
             poolFull: true,
           }),
           {
@@ -816,13 +695,8 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
           `[DataImport] Connected to session ${sessionId} (reused: ${poolResult.reused})`,
         );
       } catch (connectError) {
-        const msg =
-          connectError instanceof Error
-            ? connectError.message
-            : String(connectError);
-        console.error(
-          `[DataImport] Failed to connect to session ${sessionId}: ${msg}`,
-        );
+        const msg = connectError instanceof Error ? connectError.message : String(connectError);
+        console.error(`[DataImport] Failed to connect to session ${sessionId}: ${msg}`);
 
         // Session is dead in CF but still tracked in KV — clean it up.
         await removePooledSession(env.BROWSER_SESSIONS, sessionId);
@@ -841,8 +715,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
           return new Response(
             JSON.stringify({
               success: false,
-              error:
-                "All browser sessions are currently busy. Please retry shortly.",
+              error: "All browser sessions are currently busy. Please retry shortly.",
               poolFull: true,
             }),
             {
@@ -859,13 +732,19 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
         try {
           browser = await connect(env.BROWSER, sessionId);
         } catch (retryConnectError) {
-          const retryMsg = retryConnectError instanceof Error
-            ? retryConnectError.message
-            : String(retryConnectError);
-          console.error(`[DataImport] Failed to connect to retry session ${sessionId}: ${retryMsg}`);
+          const retryMsg =
+            retryConnectError instanceof Error
+              ? retryConnectError.message
+              : String(retryConnectError);
+          console.error(
+            `[DataImport] Failed to connect to retry session ${sessionId}: ${retryMsg}`,
+          );
           await removePooledSession(env.BROWSER_SESSIONS, sessionId);
           return new Response(
-            JSON.stringify({ success: false, error: "Browser session unavailable. Please retry shortly." }),
+            JSON.stringify({
+              success: false,
+              error: "Browser session unavailable. Please retry shortly.",
+            }),
             { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "10" } },
           );
         }
@@ -874,9 +753,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
     }
 
     const page = await browser.newPage();
-    console.log(
-      `[DataImport] Page created. Session will remain active for ~10 minutes.`,
-    );
+    console.log(`[DataImport] Page created. Session will remain active for ~10 minutes.`);
 
     // Set default timeout for all page operations (goto, click, evaluate, etc)
     page.setDefaultTimeout(PAGE_LOAD_TIMEOUT);
@@ -892,11 +769,8 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
       // Google Collections supports ?pageNumber=N (1-indexed) for stable pagination —
       // this is simpler and more reliable than click-based navigation, and also
       // triggers a fresh AF_initDataCallback blob for each page's places.
-      const targetUrl =
-        pageNum > 0 ? addPageNumberToUrl(body.url, pageNum) : body.url;
-      console.log(
-        `[DataImport] Loading collection page ${pageNum + 1}: ${targetUrl}`,
-      );
+      const targetUrl = pageNum > 0 ? addPageNumberToUrl(body.url, pageNum) : body.url;
+      console.log(`[DataImport] Loading collection page ${pageNum + 1}: ${targetUrl}`);
       await page.goto(targetUrl, {
         waitUntil: "domcontentloaded",
         timeout: PAGE_LOAD_TIMEOUT,
@@ -924,17 +798,13 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
             matched++;
           }
         }
-        console.log(
-          `[DataImport] Matched ${matched}/${places.length} places with blob data`,
-        );
+        console.log(`[DataImport] Matched ${matched}/${places.length} places with blob data`);
       }
 
       if (places.length === 0) {
         console.log("[DataImport] No places found on current page");
       } else {
-        console.log(
-          `[DataImport] Found ${places.length} places on page ${pageNum + 1}`,
-        );
+        console.log(`[DataImport] Found ${places.length} places on page ${pageNum + 1}`);
         allPlaces.push(...places);
       }
 
@@ -994,8 +864,7 @@ async function handleDataImport(request: Request, env: Env): Promise<Response> {
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[DataImport] Error during extraction: ${errorMessage}`);
 
       await page.close();
@@ -1124,9 +993,7 @@ export default {
         }
       } catch (rateLimitError) {
         // Rate limiting not available in local dev - skip silently
-        console.debug(
-          `[RateLimit] Skipped (not available in dev): ${rateLimitError}`,
-        );
+        console.debug(`[RateLimit] Skipped (not available in dev): ${rateLimitError}`);
       }
     }
 
@@ -1137,9 +1004,7 @@ export default {
       console.error(
         `[Auth] Failed authentication attempt - IP: ${ip}, Path: ${
           url.pathname
-        }, Method: ${request.method}, Auth Header: ${
-          authHeader ? "present" : "missing"
-        }`,
+        }, Method: ${request.method}, Auth Header: ${authHeader ? "present" : "missing"}`,
       );
 
       if (url.pathname !== "/" && request.method === "GET") {
@@ -1178,9 +1043,8 @@ export default {
       const useLocalPlaywright = env.USE_LOCAL_PLAYWRIGHT === "1";
 
       if (useLocalPlaywright) {
-        const playwrightServerUrl =
-          env.PLAYWRIGHT_SERVER_URL || "http://localhost:3001";
-        const body = await request.json() as { url?: string; sessionId?: string };
+        const playwrightServerUrl = env.PLAYWRIGHT_SERVER_URL || "http://localhost:3001";
+        const body = (await request.json()) as { url?: string; sessionId?: string };
 
         // Acquire a session from the pool for local Playwright too
         const poolResult = await acquirePooledSession(
@@ -1194,8 +1058,7 @@ export default {
         if (!poolResult) {
           return new Response(
             JSON.stringify({
-              error:
-                "All browser sessions are currently busy. Please retry shortly.",
+              error: "All browser sessions are currently busy. Please retry shortly.",
               poolFull: true,
             }),
             {
@@ -1210,17 +1073,14 @@ export default {
         }
 
         try {
-          const response = await fetch(
-            `${playwrightServerUrl}/api/place-details`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                ...body,
-                sessionId: poolResult.sessionId,
-              }),
-            },
-          );
+          const response = await fetch(`${playwrightServerUrl}/api/place-details`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...body,
+              sessionId: poolResult.sessionId,
+            }),
+          });
 
           const data = await response.json();
 
@@ -1246,393 +1106,413 @@ export default {
             poolOptions.keepAliveMs,
           );
 
-          return new Response(
-            JSON.stringify({ error: "Failed to extract place details" }),
-            {
-              status: 502,
-              headers: { "Content-Type": "application/json", ...corsHeaders },
-            },
-          );
+          return new Response(JSON.stringify({ error: "Failed to extract place details" }), {
+            status: 502,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          });
         }
       } else {
         // Production: use Cloudflare Browser Rendering with session pool.
         try {
-        const body = (await request.json()) as { url?: string };
-        const placeUrl = body.url;
+          const body = (await request.json()) as { url?: string };
+          const placeUrl = body.url;
 
-        if (!placeUrl) {
-          return new Response(
-            JSON.stringify({ error: "Missing url parameter" }),
-            {
+          if (!placeUrl) {
+            return new Response(JSON.stringify({ error: "Missing url parameter" }), {
               status: 400,
               headers: { "Content-Type": "application/json", ...corsHeaders },
-            },
-          );
-        }
-
-        // Acquire a session from the pool.
-        let poolSessionId: string;
-        let browser: any;
-
-        const poolResult = await acquirePooledSession(
-          env.BROWSER_SESSIONS,
-          env.BROWSER,
-          undefined,
-          undefined,
-          poolOptions,
-        );
-
-        if (!poolResult) {
-          return new Response(
-            JSON.stringify({
-              error:
-                "All browser sessions are currently busy. Please retry shortly.",
-              poolFull: true,
-            }),
-            {
-              status: 503,
-              headers: {
-                "Content-Type": "application/json",
-                "Retry-After": "10",
-                ...corsHeaders,
-              },
-            },
-          );
-        }
-
-        poolSessionId = poolResult.sessionId;
-
-        try {
-          browser = await connect(env.BROWSER, poolSessionId);
-          console.log(
-            `[PlaceDetails] Connected to session ${poolSessionId} (reused: ${poolResult.reused})`,
-          );
-        } catch (connectError) {
-          const msg =
-            connectError instanceof Error
-              ? connectError.message
-              : String(connectError);
-
-          // Reused sessions can hit a brief reconnect window just after the
-          // previous Worker called browser.close(). Wait 300 ms and try once
-          // more on the same session before declaring it dead.
-          if (poolResult.reused) {
-            await new Promise(r => setTimeout(r, 300));
-            try {
-              browser = await connect(env.BROWSER, poolSessionId);
-              console.log(`[PlaceDetails] Connected to session ${poolSessionId} after brief reconnect delay`);
-            } catch (_) {
-              // Fall through to dead-session removal below.
-            }
+            });
           }
 
-          if (!browser) {
-            // No reconnect succeeded — session is dead. Clean up and try again.
-            console.error(
-              `[PlaceDetails] Failed to connect to session ${poolSessionId}: ${msg}`,
-            );
-            await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
+          if (!isValidGoogleMapsUrl(placeUrl)) {
+            return new Response(JSON.stringify({ error: "Invalid URL" }), {
+              status: 400,
+              headers: { "Content-Type": "application/json", ...corsHeaders },
+            });
+          }
 
-            const retryResult = await acquirePooledSession(
-              env.BROWSER_SESSIONS,
-              env.BROWSER,
-              undefined,
-              undefined,
-              poolOptions,
-            );
+          // Acquire a session from the pool.
+          let poolSessionId: string;
+          let browser: any;
 
-            if (!retryResult) {
-              return new Response(
-                JSON.stringify({
-                  error:
-                    "All browser sessions are currently busy. Please retry shortly.",
-                  poolFull: true,
-                }),
-                {
-                  status: 503,
-                  headers: {
-                    "Content-Type": "application/json",
-                    "Retry-After": "10",
-                    ...corsHeaders,
-                  },
+          const poolResult = await acquirePooledSession(
+            env.BROWSER_SESSIONS,
+            env.BROWSER,
+            undefined,
+            undefined,
+            poolOptions,
+          );
+
+          if (!poolResult) {
+            return new Response(
+              JSON.stringify({
+                error: "All browser sessions are currently busy. Please retry shortly.",
+                poolFull: true,
+              }),
+              {
+                status: 503,
+                headers: {
+                  "Content-Type": "application/json",
+                  "Retry-After": "10",
+                  ...corsHeaders,
                 },
-              );
-            }
-
-            poolSessionId = retryResult.sessionId;
-            try {
-              browser = await connect(env.BROWSER, poolSessionId);
-            } catch (retryConnectError) {
-              const retryMsg = retryConnectError instanceof Error
-                ? retryConnectError.message
-                : String(retryConnectError);
-              console.error(`[PlaceDetails] Failed to connect to retry session ${poolSessionId}: ${retryMsg}`);
-              await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
-              return new Response(
-                JSON.stringify({ error: "Browser session unavailable. Please retry shortly.", poolFull: true }),
-                { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "10", ...corsHeaders } },
-              );
-            }
-            console.log(`[PlaceDetails] Connected to retry session ${poolSessionId}`);
+              },
+            );
           }
-        }
 
-        // Extract coordinates from the URL's data parameter BEFORE page navigation.
-        // The !8m2!3d{lat}!4d{lng} fragment is set server-side by Google and encodes
-        // the actual place pin location. It is completely independent of the browser
-        // viewport or the Cloudflare data-centre geo-detected location, which causes
-        // the /@lat,lng/zoom/ viewport portion of the URL to be wrong (Sydney) when
-        // running in Cloudflare Browser Rendering.
-        const urlDataParamMatch = placeUrl!.match(/!8m2!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-        const urlDataLat = urlDataParamMatch ? parseFloat(urlDataParamMatch[1]) : null;
-        const urlDataLng = urlDataParamMatch ? parseFloat(urlDataParamMatch[2]) : null;
-        if (urlDataLat !== null) {
-          console.log(`[PlaceDetails] Coords from URL data param: ${urlDataLat}, ${urlDataLng}`);
-        }
+          poolSessionId = poolResult.sessionId;
 
-        const page = await browser.newPage();
+          try {
+            browser = await connect(env.BROWSER, poolSessionId);
+            console.log(
+              `[PlaceDetails] Connected to session ${poolSessionId} (reused: ${poolResult.reused})`,
+            );
+          } catch (connectError) {
+            const msg = connectError instanceof Error ? connectError.message : String(connectError);
 
-        try {
-          // Strip /@lat,lng,zoom/ from the URL to prevent the browser inheriting
-          // a stale viewport from a previous session visit. Handles both z (zoom level)
-          // and m (metres above ground) suffix formats.
-          const cleanUrl = placeUrl!.replace(
-            /\/@-?\d+\.?\d*,-?\d+\.?\d*,\d+\.?\d*[mz]\//,
-            "/",
-          );
-          console.log(`[PlaceDetails] Navigating to: ${cleanUrl}`);
-          await page.goto(cleanUrl, {
-            waitUntil: "domcontentloaded",
-            timeout: 20000,
-          });
-
-          // Wait for the place panel heading to appear.
-          await page.waitForSelector("h1", { timeout: 10000 });
-
-          // Resolve pin coordinates — prefer the URL data parameter over any
-          // DOM-extracted source, as it is set server-side by Google and is
-          // independent of the Cloudflare data-centre geo-detected location
-          // (which contaminates the /@lat,lng/ viewport portion of the URL).
-          //
-          // Collection place URLs are short CID-only URLs (no !8m2!3d yet):
-          //   /maps/place/Name/data=!4m2!3m1!1s0x{cid}
-          // Google Maps resolves the CID and rewrites the URL to the full form:
-          //   /maps/place/Name/@{lat},{lng},{zoom}/data=...!8m2!3d{lat}!4d{lng}...
-          // We wait for that rewrite to capture the authoritative pin coordinates.
-          let coordLat: number | null = urlDataLat;
-          let coordLng: number | null = urlDataLng;
-
-          if (coordLat === null) {
-            try {
-              // Wait up to 15 s for Google Maps to resolve the CID and populate
-              // the data parameter with the place pin coordinates.
-              await page.waitForURL(/!8m2!3d/, { timeout: 15000 });
-              const resolvedUrl = page.url();
-              const m = resolvedUrl.match(/!8m2!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-              if (m) {
-                coordLat = parseFloat(m[1]);
-                coordLng = parseFloat(m[2]);
-                console.log(`[PlaceDetails] Coords from resolved URL data param: ${coordLat}, ${coordLng}`);
+            // Reused sessions can hit a brief reconnect window just after the
+            // previous Worker called browser.close(). Wait 300 ms and try once
+            // more on the same session before declaring it dead.
+            if (poolResult.reused) {
+              await new Promise((r) => setTimeout(r, 300));
+              try {
+                browser = await connect(env.BROWSER, poolSessionId);
+                console.log(
+                  `[PlaceDetails] Connected to session ${poolSessionId} after brief reconnect delay`,
+                );
+              } catch {
+                // Fall through to dead-session removal below.
               }
-            } catch (_) {
-              console.log("[PlaceDetails] URL did not update with data param coords, falling back to JSON-LD");
             }
-          } else {
-            console.log(`[PlaceDetails] Coords from original URL data param: ${coordLat}, ${coordLng}`);
+
+            if (!browser) {
+              // No reconnect succeeded — session is dead. Clean up and try again.
+              console.error(`[PlaceDetails] Failed to connect to session ${poolSessionId}: ${msg}`);
+              await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
+
+              const retryResult = await acquirePooledSession(
+                env.BROWSER_SESSIONS,
+                env.BROWSER,
+                undefined,
+                undefined,
+                poolOptions,
+              );
+
+              if (!retryResult) {
+                return new Response(
+                  JSON.stringify({
+                    error: "All browser sessions are currently busy. Please retry shortly.",
+                    poolFull: true,
+                  }),
+                  {
+                    status: 503,
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Retry-After": "10",
+                      ...corsHeaders,
+                    },
+                  },
+                );
+              }
+
+              poolSessionId = retryResult.sessionId;
+              try {
+                browser = await connect(env.BROWSER, poolSessionId);
+              } catch (retryConnectError) {
+                const retryMsg =
+                  retryConnectError instanceof Error
+                    ? retryConnectError.message
+                    : String(retryConnectError);
+                console.error(
+                  `[PlaceDetails] Failed to connect to retry session ${poolSessionId}: ${retryMsg}`,
+                );
+                await removePooledSession(env.BROWSER_SESSIONS, poolSessionId);
+                return new Response(
+                  JSON.stringify({
+                    error: "Browser session unavailable. Please retry shortly.",
+                    poolFull: true,
+                  }),
+                  {
+                    status: 503,
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Retry-After": "10",
+                      ...corsHeaders,
+                    },
+                  },
+                );
+              }
+              console.log(`[PlaceDetails] Connected to retry session ${poolSessionId}`);
+            }
           }
 
-          // Brief settle delay to ensure secondary elements (address, status)
-          // have rendered after the main content loads.
-          await page.waitForTimeout(500);
+          // Extract coordinates from the URL's data parameter BEFORE page navigation.
+          // The !8m2!3d{lat}!4d{lng} fragment is set server-side by Google and encodes
+          // the actual place pin location. It is completely independent of the browser
+          // viewport or the Cloudflare data-centre geo-detected location, which causes
+          // the /@lat,lng/zoom/ viewport portion of the URL to be wrong (Sydney) when
+          // running in Cloudflare Browser Rendering.
+          const urlDataParamMatch = placeUrl!.match(/!8m2!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+          const urlDataLat = urlDataParamMatch ? parseFloat(urlDataParamMatch[1]) : null;
+          const urlDataLng = urlDataParamMatch ? parseFloat(urlDataParamMatch[2]) : null;
+          if (urlDataLat !== null) {
+            console.log(`[PlaceDetails] Coords from URL data param: ${urlDataLat}, ${urlDataLng}`);
+          }
 
-          const details = await page.evaluate(({ preExtractedLat, preExtractedLng }: { preExtractedLat: number | null, preExtractedLng: number | null }) => {
-            const url = window.location.href;
+          const page = await browser.newPage();
 
-            // Use pre-resolved coordinates from the URL data parameter when available.
-            let lat: number | null = preExtractedLat;
-            let lng: number | null = preExtractedLng;
+          try {
+            // Strip /@lat,lng,zoom/ from the URL to prevent the browser inheriting
+            // a stale viewport from a previous session visit. Handles both z (zoom level)
+            // and m (metres above ground) suffix formats.
+            const cleanUrl = placeUrl!.replace(/\/@-?\d+\.?\d*,-?\d+\.?\d*,\d+\.?\d*[mz]\//, "/");
+            console.log(`[PlaceDetails] Navigating to: ${cleanUrl}`);
+            await page.goto(cleanUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: 20000,
+            });
 
-            // Fallback: JSON-LD structured data. Only present on initial server-rendered
-            // loads, not SPA navigations, but worth attempting when data param is absent.
-            if (lat === null || lng === null) {
-              const jsonLdScripts = document.querySelectorAll(
-                'script[type="application/ld+json"]',
+            // Wait for the place panel heading to appear.
+            await page.waitForSelector("h1", { timeout: 10000 });
+
+            // Resolve pin coordinates — prefer the URL data parameter over any
+            // DOM-extracted source, as it is set server-side by Google and is
+            // independent of the Cloudflare data-centre geo-detected location
+            // (which contaminates the /@lat,lng/ viewport portion of the URL).
+            //
+            // Collection place URLs are short CID-only URLs (no !8m2!3d yet):
+            //   /maps/place/Name/data=!4m2!3m1!1s0x{cid}
+            // Google Maps resolves the CID and rewrites the URL to the full form:
+            //   /maps/place/Name/@{lat},{lng},{zoom}/data=...!8m2!3d{lat}!4d{lng}...
+            // We wait for that rewrite to capture the authoritative pin coordinates.
+            let coordLat: number | null = urlDataLat;
+            let coordLng: number | null = urlDataLng;
+
+            if (coordLat === null) {
+              try {
+                // Wait up to 15 s for Google Maps to resolve the CID and populate
+                // the data parameter with the place pin coordinates.
+                await page.waitForURL(/!8m2!3d/, { timeout: 15000 });
+                const resolvedUrl = page.url();
+                const m = resolvedUrl.match(/!8m2!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+                if (m) {
+                  coordLat = parseFloat(m[1]);
+                  coordLng = parseFloat(m[2]);
+                  console.log(
+                    `[PlaceDetails] Coords from resolved URL data param: ${coordLat}, ${coordLng}`,
+                  );
+                }
+              } catch {
+                console.log(
+                  "[PlaceDetails] URL did not update with data param coords, falling back to JSON-LD",
+                );
+              }
+            } else {
+              console.log(
+                `[PlaceDetails] Coords from original URL data param: ${coordLat}, ${coordLng}`,
               );
-              for (const script of jsonLdScripts) {
-                try {
-                  const data = JSON.parse(script.textContent || "");
-                  const geo = data?.geo ?? data?.location?.geo;
-                  const rawLat = geo?.latitude;
-                  const rawLng = geo?.longitude;
-                  if (rawLat != null && rawLng != null) {
-                    const parsedLat =
-                      typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
-                    const parsedLng =
-                      typeof rawLng === "number" ? rawLng : parseFloat(rawLng);
-                    if (!isNaN(parsedLat) && !isNaN(parsedLng)) {
-                      lat = parsedLat;
-                      lng = parsedLng;
+            }
+
+            // Brief settle delay to ensure secondary elements (address, status)
+            // have rendered after the main content loads.
+            await page.waitForTimeout(500);
+
+            const details = await page.evaluate(
+              ({
+                preExtractedLat,
+                preExtractedLng,
+              }: {
+                preExtractedLat: number | null;
+                preExtractedLng: number | null;
+              }) => {
+                const url = window.location.href;
+
+                // Use pre-resolved coordinates from the URL data parameter when available.
+                let lat: number | null = preExtractedLat;
+                let lng: number | null = preExtractedLng;
+
+                // Fallback: JSON-LD structured data. Only present on initial server-rendered
+                // loads, not SPA navigations, but worth attempting when data param is absent.
+                if (lat === null || lng === null) {
+                  const jsonLdScripts = document.querySelectorAll(
+                    'script[type="application/ld+json"]',
+                  );
+                  for (const script of jsonLdScripts) {
+                    try {
+                      const data = JSON.parse(script.textContent || "");
+                      const geo = data?.geo ?? data?.location?.geo;
+                      const rawLat = geo?.latitude;
+                      const rawLng = geo?.longitude;
+                      if (rawLat != null && rawLng != null) {
+                        const parsedLat = typeof rawLat === "number" ? rawLat : parseFloat(rawLat);
+                        const parsedLng = typeof rawLng === "number" ? rawLng : parseFloat(rawLng);
+                        if (!isNaN(parsedLat) && !isNaN(parsedLng)) {
+                          lat = parsedLat;
+                          lng = parsedLng;
+                          break;
+                        }
+                      }
+                    } catch {
+                      // Ignore malformed JSON-LD.
+                    }
+                  }
+                }
+
+                // Name.
+                const name = document.querySelector("h1")?.textContent;
+
+                // Type (category).
+                const typeButton = document.querySelector('button[jsaction*="category"]');
+                let type = typeButton?.textContent;
+                if (!type) {
+                  const buttons = document.querySelectorAll("button");
+                  for (const btn of buttons) {
+                    const text = btn.textContent?.toLowerCase() || "";
+                    // Skip "Nearby restaurants", "Nearby hotels", etc. — these are
+                    // navigation buttons further down the page, not the place category.
+                    if (text.startsWith("nearby")) continue;
+                    if (
+                      text.includes("restaurant") ||
+                      text.includes("cafe") ||
+                      text.includes("shop") ||
+                      text.includes("bar") ||
+                      text.includes("hotel") ||
+                      text.includes("museum") ||
+                      text.includes("park") ||
+                      text.includes("gallery") ||
+                      text.includes("store")
+                    ) {
+                      type = btn.textContent;
                       break;
                     }
                   }
-                } catch (_) {
-                  // Ignore malformed JSON-LD.
                 }
-              }
-            }
 
-            // Name.
-            const name = document.querySelector("h1")?.textContent;
-
-            // Type (category).
-            const typeButton = document.querySelector(
-              'button[jsaction*="category"]',
-            );
-            let type = typeButton?.textContent;
-            if (!type) {
-              const buttons = document.querySelectorAll("button");
-              for (const btn of buttons) {
-                const text = btn.textContent?.toLowerCase() || "";
-                // Skip "Nearby restaurants", "Nearby hotels", etc. — these are
-                // navigation buttons further down the page, not the place category.
-                if (text.startsWith("nearby")) continue;
-                if (
-                  text.includes("restaurant") ||
-                  text.includes("cafe") ||
-                  text.includes("shop") ||
-                  text.includes("bar") ||
-                  text.includes("hotel") ||
-                  text.includes("museum") ||
-                  text.includes("park") ||
-                  text.includes("gallery") ||
-                  text.includes("store")
-                ) {
-                  type = btn.textContent;
-                  break;
+                // Address.
+                let address = null;
+                const addressButtons = document.querySelectorAll(
+                  'button[aria-label*="Address"], button[data-item-id="address"]',
+                );
+                for (const btn of addressButtons) {
+                  const label = btn.getAttribute("aria-label");
+                  if (label && label.includes("Address:")) {
+                    address = label.replace("Address:", "").trim();
+                    break;
+                  }
+                  const text = btn.textContent;
+                  if (text && text.length > 5 && text.length < 200) {
+                    address = text;
+                    break;
+                  }
                 }
-              }
-            }
 
-            // Address.
-            let address = null;
-            const addressButtons = document.querySelectorAll(
-              'button[aria-label*="Address"], button[data-item-id="address"]',
+                // Website.
+                let website = null;
+                const websiteLinks = document.querySelectorAll(
+                  'a[data-item-id="authority"], a[aria-label*="Website"]',
+                );
+                for (const link of websiteLinks) {
+                  if (
+                    (link as HTMLAnchorElement).href &&
+                    !(link as HTMLAnchorElement).href.includes("google.com")
+                  ) {
+                    website = (link as HTMLAnchorElement).href;
+                    break;
+                  }
+                }
+
+                // Rating.
+                const ratingImg = document.querySelector('[role="img"][aria-label*="stars"]');
+                const ratingLabel = ratingImg?.getAttribute("aria-label");
+                const ratingMatch = ratingLabel?.match(/(\d+\.?\d*)\s*stars?/i);
+                const rating = ratingMatch ? parseFloat(ratingMatch[1]) : null;
+
+                // Review count.
+                const reviewButtons = document.querySelectorAll(
+                  'button[aria-label*="reviews"], [aria-label*="Reviews"]',
+                );
+                let reviewCount = null;
+                for (const btn of reviewButtons) {
+                  const label = btn.getAttribute("aria-label") || btn.textContent;
+                  const countMatch = label?.match(/(\d+)\s*reviews?/i);
+                  if (countMatch) {
+                    reviewCount = parseInt(countMatch[1]);
+                    break;
+                  }
+                }
+
+                // Business status (e.g. "Permanently closed", "Temporarily closed").
+                let status = "operational";
+                const statusEl = document.querySelector("span.fCEvvc");
+                if (statusEl) {
+                  const statusText = statusEl.textContent?.trim().toLowerCase() || "";
+                  if (statusText.includes("permanently closed")) {
+                    status = "permanently_closed";
+                  } else if (statusText.includes("temporarily closed")) {
+                    status = "temporarily_closed";
+                  }
+                }
+
+                return {
+                  name,
+                  type,
+                  address,
+                  lat,
+                  lng,
+                  website,
+                  rating,
+                  review_count: reviewCount,
+                  status,
+                  google_maps_url: url.split("?")[0],
+                };
+              },
+              { preExtractedLat: coordLat, preExtractedLng: coordLng },
             );
-            for (const btn of addressButtons) {
-              const label = btn.getAttribute("aria-label");
-              if (label && label.includes("Address:")) {
-                address = label.replace("Address:", "").trim();
-                break;
-              }
-              const text = btn.textContent;
-              if (text && text.length > 5 && text.length < 200) {
-                address = text;
-                break;
-              }
-            }
 
-            // Website.
-            let website = null;
-            const websiteLinks = document.querySelectorAll(
-              'a[data-item-id="authority"], a[aria-label*="Website"]',
+            await page.close();
+            // Explicitly disconnect from the browser before returning.
+            // For remotely connected browsers (via connect()), browser.close()
+            // disconnects the Worker from the browser server WITHOUT killing the
+            // browser process — the CF session stays alive for keep_alive ms.
+            // This is a clean handshake that avoids the ungraceful WebSocket
+            // teardown caused by the Workers runtime cancelling waitUntil() tasks
+            // after the response is sent, which was producing dead-session errors.
+            try {
+              await browser.close();
+            } catch {}
+            await releasePooledSession(
+              env.BROWSER_SESSIONS,
+              poolSessionId,
+              poolOptions.keepAliveMs,
             );
-            for (const link of websiteLinks) {
-              if (
-                (link as HTMLAnchorElement).href &&
-                !(link as HTMLAnchorElement).href.includes("google.com")
-              ) {
-                website = (link as HTMLAnchorElement).href;
-                break;
-              }
-            }
 
-            // Rating.
-            const ratingImg = document.querySelector(
-              '[role="img"][aria-label*="stars"]',
+            console.log(
+              `[PlaceDetails] Extracted: ${details.name} | coords={${details.lat}, ${details.lng}}`,
             );
-            const ratingLabel = ratingImg?.getAttribute("aria-label");
-            const ratingMatch = ratingLabel?.match(/(\d+\.?\d*)\s*stars?/i);
-            const rating = ratingMatch ? parseFloat(ratingMatch[1]) : null;
 
-            // Review count.
-            const reviewButtons = document.querySelectorAll(
-              'button[aria-label*="reviews"], [aria-label*="Reviews"]',
-            );
-            let reviewCount = null;
-            for (const btn of reviewButtons) {
-              const label = btn.getAttribute("aria-label") || btn.textContent;
-              const countMatch = label?.match(/(\d+)\s*reviews?/i);
-              if (countMatch) {
-                reviewCount = parseInt(countMatch[1]);
-                break;
-              }
-            }
-
-            // Business status (e.g. "Permanently closed", "Temporarily closed").
-            let status = "operational";
-            const statusEl = document.querySelector("span.fCEvvc");
-            if (statusEl) {
-              const statusText =
-                statusEl.textContent?.trim().toLowerCase() || "";
-              if (statusText.includes("permanently closed")) {
-                status = "permanently_closed";
-              } else if (statusText.includes("temporarily closed")) {
-                status = "temporarily_closed";
-              }
-            }
-
-            return {
-              name,
-              type,
-              address,
-              lat,
-              lng,
-              website,
-              rating,
-              review_count: reviewCount,
-              status,
-              google_maps_url: url.split("?")[0],
-            };
-          }, { preExtractedLat: coordLat, preExtractedLng: coordLng });
-
-          await page.close();
-          // Explicitly disconnect from the browser before returning.
-          // For remotely connected browsers (via connect()), browser.close()
-          // disconnects the Worker from the browser server WITHOUT killing the
-          // browser process — the CF session stays alive for keep_alive ms.
-          // This is a clean handshake that avoids the ungraceful WebSocket
-          // teardown caused by the Workers runtime cancelling waitUntil() tasks
-          // after the response is sent, which was producing dead-session errors.
-          try { await browser.close(); } catch (_) {}
-          await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId, poolOptions.keepAliveMs);
-
-          console.log(
-            `[PlaceDetails] Extracted: ${details.name} | coords={${details.lat}, ${details.lng}}`,
-          );
-
-          return new Response(
-            JSON.stringify({ result: details, sessionId: poolSessionId }),
-            {
+            return new Response(JSON.stringify({ result: details, sessionId: poolSessionId }), {
               status: 200,
               headers: { "Content-Type": "application/json", ...corsHeaders },
-            },
-          );
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          console.error(`[PlaceDetails] Error: ${msg}`);
+            });
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            console.error(`[PlaceDetails] Error: ${msg}`);
 
-          await page.close();
-          try { await browser.close(); } catch (_) {}
-          await releasePooledSession(env.BROWSER_SESSIONS, poolSessionId, poolOptions.keepAliveMs);
+            await page.close();
+            try {
+              await browser.close();
+            } catch {}
+            await releasePooledSession(
+              env.BROWSER_SESSIONS,
+              poolSessionId,
+              poolOptions.keepAliveMs,
+            );
 
-          return new Response(
-            JSON.stringify({ error: "Failed to extract place details" }),
-            {
+            return new Response(JSON.stringify({ error: "Failed to extract place details" }), {
               status: 500,
               headers: { "Content-Type": "application/json", ...corsHeaders },
-            },
-          );
-        }
+            });
+          }
         } catch (outerError) {
           const msg = outerError instanceof Error ? outerError.message : String(outerError);
           console.error(`[PlaceDetails] Unhandled error: ${msg}`);

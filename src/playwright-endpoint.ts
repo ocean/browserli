@@ -1,9 +1,9 @@
 /**
  * Playwright Endpoint Discovery
- * 
+ *
  * Reads the WebSocket endpoint from .playwright-endpoint.json
  * created by the local Playwright server.
- * 
+ *
  * This allows Placemake and Browserli to auto-discover the server.
  */
 
@@ -27,8 +27,8 @@ export function getPlaywrightEndpoint(): string | null {
     const data = readFileSync(endpointFile, "utf-8");
     const endpoint = JSON.parse(data) as EndpointData;
     return endpoint.url;
-  } catch (error) {
-    // File doesn't exist (production) or is invalid
+  } catch {
+    // File doesn't exist (production) or is invalid.
     return null;
   }
 }
