@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  isValidGoogleMapsUrl,
-  timingSafeEqual,
-  validateApiKey,
-} from "../src/utils";
+import { isValidGoogleMapsUrl, timingSafeEqual, validateApiKey } from "../src/utils";
 
 // ---------------------------------------------------------------------------
 // isValidGoogleMapsUrl
@@ -13,26 +9,16 @@ describe("isValidGoogleMapsUrl", () => {
   describe("valid URLs", () => {
     it("accepts a google.com /maps/ URL", () => {
       expect(
-        isValidGoogleMapsUrl(
-          "https://www.google.com/maps/place/Eiffel+Tower/@48.8584,2.2945,17z",
-        ),
+        isValidGoogleMapsUrl("https://www.google.com/maps/place/Eiffel+Tower/@48.8584,2.2945,17z"),
       ).toBe(true);
     });
 
     it("accepts a google.com /collections/ URL", () => {
-      expect(
-        isValidGoogleMapsUrl(
-          "https://www.google.com/collections/s/list/ABC123",
-        ),
-      ).toBe(true);
+      expect(isValidGoogleMapsUrl("https://www.google.com/collections/s/list/ABC123")).toBe(true);
     });
 
     it("accepts a google.com /placelists/ URL", () => {
-      expect(
-        isValidGoogleMapsUrl(
-          "https://www.google.com/placelists/some/path",
-        ),
-      ).toBe(true);
+      expect(isValidGoogleMapsUrl("https://www.google.com/placelists/some/path")).toBe(true);
     });
 
     it("accepts a maps.app.goo.gl short URL", () => {
@@ -50,27 +36,19 @@ describe("isValidGoogleMapsUrl", () => {
 
   describe("rejected URLs", () => {
     it("rejects http:// (non-HTTPS)", () => {
-      expect(
-        isValidGoogleMapsUrl("http://www.google.com/maps/place/Somewhere"),
-      ).toBe(false);
+      expect(isValidGoogleMapsUrl("http://www.google.com/maps/place/Somewhere")).toBe(false);
     });
 
     it("rejects a non-Google domain", () => {
-      expect(isValidGoogleMapsUrl("https://evil.com/maps/place/Trap")).toBe(
-        false,
-      );
+      expect(isValidGoogleMapsUrl("https://evil.com/maps/place/Trap")).toBe(false);
     });
 
     it("rejects a google.com URL without a maps/collections/placelists path", () => {
-      expect(isValidGoogleMapsUrl("https://www.google.com/search?q=test")).toBe(
-        false,
-      );
+      expect(isValidGoogleMapsUrl("https://www.google.com/search?q=test")).toBe(false);
     });
 
     it("rejects a subdomain of google.com that is not maps.app.goo.gl", () => {
-      expect(
-        isValidGoogleMapsUrl("https://drive.google.com/maps/place/Fake"),
-      ).toBe(true); // Note: hostname includes "google.com" so path check applies
+      expect(isValidGoogleMapsUrl("https://drive.google.com/maps/place/Fake")).toBe(true); // Note: hostname includes "google.com" so path check applies
     });
 
     it("rejects an empty string", () => {
@@ -90,15 +68,11 @@ describe("isValidGoogleMapsUrl", () => {
     });
 
     it("rejects an internal IP address", () => {
-      expect(isValidGoogleMapsUrl("https://192.168.1.1/maps/place/Local")).toBe(
-        false,
-      );
+      expect(isValidGoogleMapsUrl("https://192.168.1.1/maps/place/Local")).toBe(false);
     });
 
     it("rejects a URL that merely contains 'google.com' in its path", () => {
-      expect(
-        isValidGoogleMapsUrl("https://attacker.com/redirect?to=google.com/maps/"),
-      ).toBe(false);
+      expect(isValidGoogleMapsUrl("https://attacker.com/redirect?to=google.com/maps/")).toBe(false);
     });
   });
 });

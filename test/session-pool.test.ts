@@ -75,10 +75,7 @@ describe("acquirePooledSession", () => {
   it("acquires a fresh session when the pool is empty", async () => {
     mockAcquire.mockResolvedValue({ sessionId: "sess-001" });
 
-    const result = await acquirePooledSession(
-      env.BROWSER_SESSIONS,
-      env.BROWSER,
-    );
+    const result = await acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER);
 
     expect(result).toEqual({ sessionId: "sess-001", reused: false });
     expect(mockAcquire).toHaveBeenCalledOnce();
@@ -98,10 +95,7 @@ describe("acquirePooledSession", () => {
     await seedBusySession("sess-busy");
     await seedIdleSession("sess-idle");
 
-    const result = await acquirePooledSession(
-      env.BROWSER_SESSIONS,
-      env.BROWSER,
-    );
+    const result = await acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER);
 
     expect(result).toEqual({ sessionId: "sess-idle", reused: true });
     expect(mockAcquire).not.toHaveBeenCalled();
@@ -122,10 +116,7 @@ describe("acquirePooledSession", () => {
     await seedBusySession("sess-a");
     await seedBusySession("sess-b");
 
-    const result = await acquirePooledSession(
-      env.BROWSER_SESSIONS,
-      env.BROWSER,
-    );
+    const result = await acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER);
 
     expect(result).toBeNull();
     expect(mockAcquire).not.toHaveBeenCalled();
@@ -143,20 +134,14 @@ describe("acquirePooledSession", () => {
 
     const raw = await env.BROWSER_SESSIONS.get("session:sess-003");
     const session = JSON.parse(raw!);
-    expect(session.collectionUrl).toBe(
-      "https://www.google.com/collections/s/list/ABC",
-    );
+    expect(session.collectionUrl).toBe("https://www.google.com/collections/s/list/ABC");
   });
 
   describe("specific session reuse (pagination)", () => {
     it("returns the requested session and marks it busy", async () => {
       await seedIdleSession("sess-page");
 
-      const result = await acquirePooledSession(
-        env.BROWSER_SESSIONS,
-        env.BROWSER,
-        "sess-page",
-      );
+      const result = await acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER, "sess-page");
 
       expect(result).toEqual({ sessionId: "sess-page", reused: true });
       expect(mockAcquire).not.toHaveBeenCalled();
@@ -166,11 +151,7 @@ describe("acquirePooledSession", () => {
       mockAcquire.mockResolvedValue({ sessionId: "sess-new" });
 
       // "sess-gone" does not exist in KV.
-      const result = await acquirePooledSession(
-        env.BROWSER_SESSIONS,
-        env.BROWSER,
-        "sess-gone",
-      );
+      const result = await acquirePooledSession(env.BROWSER_SESSIONS, env.BROWSER, "sess-gone");
 
       expect(result).toEqual({ sessionId: "sess-new", reused: false });
       expect(mockAcquire).toHaveBeenCalledOnce();

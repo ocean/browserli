@@ -149,9 +149,7 @@ export async function acquirePooledSession(
       if (collectionUrl) session.collectionUrl = collectionUrl;
       await putSession(kv, session, keepAliveMs);
 
-      console.log(
-        `[SessionPool] Reusing requested session ${requestedSessionId}`,
-      );
+      console.log(`[SessionPool] Reusing requested session ${requestedSessionId}`);
       return { sessionId: requestedSessionId, reused: true };
     }
 
@@ -175,7 +173,7 @@ export async function acquirePooledSession(
     // A random delay of 0–2 s spreads the burst. After waiting, we re-read the
     // pool — a later Worker may find slots already filled and avoid acquiring.
     const jitterMs = Math.floor(Math.random() * 2000);
-    await new Promise(r => setTimeout(r, jitterMs));
+    await new Promise((r) => setTimeout(r, jitterMs));
 
     const freshList = await kv.list<SessionMetadata>({ prefix: SESSION_PREFIX });
     const freshKeys = freshList.keys;
@@ -209,7 +207,9 @@ export async function acquirePooledSession(
     } catch (acquireError) {
       const msg = acquireError instanceof Error ? acquireError.message : String(acquireError);
       if (msg.includes("429")) {
-        console.warn("[SessionPool] Rate limit exhausted acquiring session, treating pool as temporarily full");
+        console.warn(
+          "[SessionPool] Rate limit exhausted acquiring session, treating pool as temporarily full",
+        );
         return null;
       }
       throw acquireError;
@@ -285,10 +285,7 @@ export async function releasePooledSession(
  * Remove a session from the pool entirely.
  * Called when a session is known to be dead (e.g. connect() failed).
  */
-export async function removePooledSession(
-  kv: KVNamespace,
-  sessionId: string,
-): Promise<void> {
+export async function removePooledSession(kv: KVNamespace, sessionId: string): Promise<void> {
   const key = `${SESSION_PREFIX}${sessionId}`;
   await kv.delete(key);
   console.log(`[SessionPool] Removed dead session ${sessionId} from pool`);
@@ -298,9 +295,7 @@ export async function removePooledSession(
  * List all sessions currently tracked in the pool.
  * Used by the /sessions debug endpoint.
  */
-export async function listPooledSessions(
-  kv: KVNamespace,
-): Promise<PooledSession[]> {
+export async function listPooledSessions(kv: KVNamespace): Promise<PooledSession[]> {
   const listResult = await kv.list<SessionMetadata>({
     prefix: SESSION_PREFIX,
   });

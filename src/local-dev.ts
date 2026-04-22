@@ -1,6 +1,6 @@
 /**
  * Local Development Utilities
- * 
+ *
  * Provides utilities for connecting to a local Playwright server
  * instead of the Cloudflare Browser Rendering API during development.
  */
@@ -41,7 +41,9 @@ export async function connectPlaywright(env: any, sessionId?: string) {
 
     if (sessionId) {
       // Reuse existing connection (but we can't actually reuse, just log it)
-      console.log(`[Local Dev] Note: session reuse not supported with local server (will create new)`);
+      console.log(
+        `[Local Dev] Note: session reuse not supported with local server (will create new)`,
+      );
     }
 
     try {
@@ -51,7 +53,7 @@ export async function connectPlaywright(env: any, sessionId?: string) {
       console.error(`[Local Dev] Failed to connect to Playwright server:`, error);
       throw new Error(
         `Cannot connect to local Playwright server at ${config.wsEndpoint}. ` +
-        `Make sure to run: node playwright-server.js`
+          `Make sure to run: node playwright-server.js`,
       );
     }
   } else {
