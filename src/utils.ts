@@ -18,7 +18,7 @@ export function isValidGoogleMapsUrl(url: string): boolean {
     }
 
     // Allow google.com domain with /maps/, /collections/, or /placelists/ paths.
-    if (parsed.hostname.includes("google.com")) {
+    if (parsed.hostname === "google.com" || parsed.hostname.endsWith(".google.com")) {
       const path = parsed.pathname;
       if (
         path.includes("/maps/") ||
@@ -58,10 +58,7 @@ export function timingSafeEqual(a: string, b: string): boolean {
 /**
  * Validate API key from request headers using constant-time comparison.
  */
-export function validateApiKey(
-  request: Request,
-  env: { API_KEYS: string },
-): boolean {
+export function validateApiKey(request: Request, env: { API_KEYS: string }): boolean {
   const authHeader = request.headers.get("Authorization");
   if (!authHeader) {
     return false;
