@@ -27,7 +27,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.18",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/workers-types": "^4.20260630.1",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
     "playwright": "^1.60.0",
