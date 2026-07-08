@@ -10,7 +10,7 @@
     "playwright:server": "node playwright-server.js",
     "deploy": "wrangler deploy",
     "build": "wrangler build",
-    "lint": "eslint src --ext .ts",
+    "lint": "oxlint src",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
