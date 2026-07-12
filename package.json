@@ -26,7 +26,7 @@
     "@cloudflare/playwright": "^1.1.2"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.18.0",
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
     "@cloudflare/workers-types": "^4.20260702.1",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.70.0",
