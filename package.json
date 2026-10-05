@@ -26,13 +26,17 @@
     "@cloudflare/playwright": "^1.1.2"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.18.0",
-    "@cloudflare/workers-types": "^4.20260702.1",
+    "@cloudflare/vitest-pool-workers": "^0.18.8",
+    "@cloudflare/workers-types": "^5.20261004.1",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.70.0",
     "playwright": "^1.60.0",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.9",
-    "wrangler": "^4.74.0"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.147.0"
+  },
+  "overrides": {
+    "undici": "^7.29.1",
+    "sharp": "^0.35.4"
   }
 }
