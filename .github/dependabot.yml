@@ -8,6 +8,7 @@ updates:
       day: "sunday"
       time: "03:00"
     cooldown:
+      default-days: 7
       semver-major-days: 10
       semver-minor-days: 5
       semver-patch-days: 2
@@ -26,6 +27,8 @@ updates:
       interval: "monthly"
       day: "sunday"
       time: "03:00"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
