@@ -78,3 +78,22 @@ export function validateApiKey(request: Request, env: { API_KEYS: string }): boo
   }
   return false;
 }
+
+/**
+ * Normalise a Google Maps URL for matching.
+ * Strips query strings and decodes unicode escapes so URLs from the
+ * AF_initDataCallback blob can be matched against DOM-scraped hrefs.
+ */
+export function normaliseGoogleMapsUrl(url: string): string {
+  try {
+    // Decode any unicode escapes (e.g. \u003d → =).
+    const decoded = url.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) =>
+      String.fromCharCode(parseInt(hex, 16)),
+    );
+    const parsed = new URL(decoded);
+    // Keep only the pathname and the data= parameter for matching.
+    return parsed.pathname;
+  } catch {
+    return url;
+  }
+}

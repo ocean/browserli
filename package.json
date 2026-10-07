@@ -13,7 +13,8 @@
     "lint": "oxlint src",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:browser": "vitest run browser"
   },
   "keywords": [
     "cloudflare",

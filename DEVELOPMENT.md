@@ -14,6 +14,27 @@
 
    The worker will be available at `http://localhost:8787`
 
+## Automated Tests
+
+```bash
+npm test              # Full suite (unit and real-browser tests).
+npm run test:browser  # Only the real-browser tests.
+```
+
+The real-browser tests (`test/*.browser.test.ts`) run headless Chrome through
+the local Browser Rendering binding that miniflare provides for `env.BROWSER`,
+using `@cloudflare/playwright` exactly as the Worker does in production. They
+cover the page scrapers in `src/page-extractors.ts` against fixture HTML (served
+at Google Maps URLs via `page.route()`, so no real network requests are made)
+and the session pool's acquire/connect/release/reuse cycle.
+
+On first run, miniflare downloads Chrome for Testing (~145 MB) into
+`~/Library/Caches/.wrangler/chrome` (macOS) or `~/.cache/.wrangler/chrome`
+(Linux). If the browser fails to launch with `spawn Unknown system error -88`
+or the download appears to hang on macOS, the extraction was incomplete: delete
+the `mac_arm-*` directory for that version and extract the downloaded zip with
+`ditto -xk <zip> <that directory>`.
+
 ## Testing Endpoints
 
 ### Root Page (Public)

@@ -7,3 +7,4 @@ dist/
 .env.local
 wrangler.toml.local
 .playwright-endpoint.json
+/.artifacts/
