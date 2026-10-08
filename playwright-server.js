@@ -352,16 +352,20 @@ function startHttpApiServer(playwrightServer) {
               const ratingMatch = ratingLabel?.match(/(\d+\.?\d*)\s*stars?/i);
               const rating = ratingMatch ? parseFloat(ratingMatch[1]) : null;
 
-              // Review count
-              const reviewButtons = document.querySelectorAll(
-                'button[aria-label*="reviews"], [aria-label*="Reviews"]',
-              );
+              // Review count. Only read from the place header (the block holding
+              // the star rating): review counts elsewhere on the page belong to
+              // other places. Google omits the count from the header for
+              // signed-out visitors, in which case this stays null.
               let reviewCount = null;
-              for (const btn of reviewButtons) {
-                const label = btn.getAttribute("aria-label") || btn.textContent;
-                const countMatch = label?.match(/(\d+)\s*reviews?/i);
+              const ratingHeader =
+                ratingImg?.closest(".F7nice") ?? ratingImg?.parentElement?.parentElement;
+              const reviewEls = ratingHeader?.querySelectorAll("[aria-label]") ?? [];
+              for (const el of reviewEls) {
+                const label = el.getAttribute("aria-label") || "";
+                // Counts use thousands separators, e.g. "1,234 reviews".
+                const countMatch = label.match(/(\d[\d,]*)\s*reviews?/i);
                 if (countMatch) {
-                  reviewCount = parseInt(countMatch[1]);
+                  reviewCount = parseInt(countMatch[1].replace(/,/g, ""), 10);
                   break;
                 }
               }

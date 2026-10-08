@@ -265,8 +265,9 @@ export async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]>
           const fullText = link.textContent?.trim() || "";
           if (!fullText || fullText.length < 3) return;
 
-          // Parse: "Place Name4.5(88)" or "Place Name4.2(1.51K)" -> name, rating, reviews.
-          const match = fullText.match(/^(.+?)(\d+\.?\d*)\((\d+\.?\d*K?)\)$/);
+          // Parse: "Place Name4.5(88)", "Place Name4.3(2,596)" or "Place Name4.2(1.51K)"
+          // -> name, rating, reviews.
+          const match = fullText.match(/^(.+?)(\d+\.?\d*)\((\d[\d,]*\.?\d*K?)\)$/);
           let name = fullText;
           let rating: number | undefined;
           let reviewCount: number | undefined;
@@ -275,7 +276,7 @@ export async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]>
             name = match[1].trim();
             if (match[2]) rating = parseFloat(match[2]);
             if (match[3]) {
-              const countStr = match[3];
+              const countStr = match[3].replace(/,/g, "");
               if (countStr.endsWith("K")) {
                 reviewCount = Math.round(parseFloat(countStr.slice(0, -1)) * 1000);
               } else {
@@ -285,7 +286,7 @@ export async function extractPlaceCardsFromPage(page: any): Promise<PlaceCard[]>
           }
 
           // Fallback cleanup for any remaining rating/review suffixes.
-          name = name.replace(/\d+\.?\d*\s*\(\d+\.?\d*K?\)$/, "").trim();
+          name = name.replace(/\d+\.?\d*\s*\(\d[\d,]*\.?\d*K?\)$/, "").trim();
           if (!name || name.length < 2) return;
 
           // Extract user note from the card container.
@@ -497,16 +498,20 @@ export async function extractPlaceDetails(
       const ratingMatch = ratingLabel?.match(/(\d+\.?\d*)\s*stars?/i);
       const rating = ratingMatch ? parseFloat(ratingMatch[1]) : null;
 
-      // Review count.
-      const reviewButtons = document.querySelectorAll(
-        'button[aria-label*="reviews"], [aria-label*="Reviews"]',
-      );
+      // Review count. Only read from the place header (the block holding the
+      // star rating): review counts elsewhere on the page, such as the
+      // Directory or "People also search for" sections, belong to other
+      // places. Google omits the count from the header for signed-out
+      // visitors, in which case this stays null.
       let reviewCount = null;
-      for (const btn of reviewButtons) {
-        const label = btn.getAttribute("aria-label") || btn.textContent;
-        const countMatch = label?.match(/(\d+)\s*reviews?/i);
+      const ratingHeader = ratingImg?.closest(".F7nice") ?? ratingImg?.parentElement?.parentElement;
+      const reviewEls = ratingHeader?.querySelectorAll("[aria-label]") ?? [];
+      for (const el of reviewEls) {
+        const label = el.getAttribute("aria-label") || "";
+        // Counts use thousands separators, e.g. "1,234 reviews".
+        const countMatch = label.match(/(\d[\d,]*)\s*reviews?/i);
         if (countMatch) {
-          reviewCount = parseInt(countMatch[1]);
+          reviewCount = parseInt(countMatch[1].replace(/,/g, ""), 10);
           break;
         }
       }

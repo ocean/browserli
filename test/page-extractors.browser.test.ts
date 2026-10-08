@@ -78,6 +78,7 @@ function collectionPageHtml(options: { nextDisabled?: boolean } = {}): string {
     <div class="TOmvfe">
       <a class="ir" href="${BIG_MUSEUM_URL}">Big Museum4.2(1.51K)</a>
     </div>
+    <a class="ir" href="https://www.google.com/maps/place/Kings+Park/data=!4m2">Kings Park4.8(2,596)</a>
     <a class="ir" href="https://www.google.com/maps/place/No+Rating/data=!4m2">No Rating Place</a>
     <a class="other" href="https://www.google.com/maps/place/Ignored/data=!4m2">Ignored link</a>
   </div>
@@ -178,6 +179,13 @@ describe("page extractors in a real browser", { timeout: 60_000 }, () => {
           note: undefined,
         },
         {
+          name: "Kings Park",
+          url: "https://www.google.com/maps/place/Kings+Park/data=!4m2",
+          rating: 4.8,
+          reviewCount: 2596,
+          note: undefined,
+        },
+        {
           name: "No Rating Place",
           url: "https://www.google.com/maps/place/No+Rating/data=!4m2",
           rating: undefined,
@@ -210,30 +218,54 @@ describe("page extractors in a real browser", { timeout: 60_000 }, () => {
       const analysis = JSON.parse(domStructure);
 
       expect(htmlContent).toContain("Perth favourites");
-      expect(analysis.mapsPlaceLinks).toBe(4);
+      expect(analysis.mapsPlaceLinks).toBe(5);
       expect(analysis.containers.roleNavigations).toBe(1);
     });
   });
 
   describe("extractPlaceDetails", () => {
-    const placeHtml = (extraHead = "", status = ""): string => `<!DOCTYPE html>
+    /**
+     * Build a place page. The rating header mirrors Google Maps' markup; when
+     * reviewLabel is omitted the header has no review count, as Google shows
+     * to signed-out visitors.
+     */
+    const placeHtml = ({
+      head = "",
+      status = "",
+      reviewLabel = "88 reviews",
+      directory = false,
+    }: {
+      head?: string;
+      status?: string;
+      reviewLabel?: string | null;
+      directory?: boolean;
+    } = {}): string => `<!DOCTYPE html>
 <html>
-<head>${extraHead}</head>
+<head>${head}</head>
 <body>
   <h1>Cafe One</h1>
   ${status}
-  <div role="img" aria-label="4.6 stars"></div>
-  <button aria-label="88 reviews">(88)</button>
+  <div class="F7nice">
+    <span><span aria-hidden="true">4.6</span><span role="img" aria-label="4.6 stars "></span></span>
+    ${reviewLabel ? `<span><span><span aria-label="${reviewLabel}">(${reviewLabel})</span></span></span>` : ""}
+  </div>
   <button jsaction="pane.rating.category">Café</button>
   <button data-item-id="address" aria-label="Address: 1 Test Street, Perth WA 6000">1 Test Street</button>
   <a data-item-id="authority" href="https://cafe-one.example/">cafe-one.example</a>
   <button>Nearby restaurants</button>
+  ${
+    directory
+      ? `<h2>Directory</h2>
+  <div><span role="img" aria-label="4.5 stars 2,278 Reviews">4.5(2,278)</span></div>
+  <div><span role="img" aria-label="3.8 stars 874 Reviews">3.8(874)</span></div>`
+      : ""
+  }
 </body>
 </html>`;
 
     it("extracts the place fields and prefers pre-extracted coordinates", async () => {
       const jsonLd = `<script type="application/ld+json">{"geo": {"latitude": 1, "longitude": 2}}</script>`;
-      await gotoFixture(page, `${PLACE_URL}?entry=ttu`, placeHtml(jsonLd));
+      await gotoFixture(page, `${PLACE_URL}?entry=ttu`, placeHtml({ head: jsonLd }));
 
       const details = await extractPlaceDetails(page, -31.95, 115.86);
 
@@ -253,7 +285,7 @@ describe("page extractors in a real browser", { timeout: 60_000 }, () => {
 
     it("falls back to JSON-LD coordinates when none are pre-extracted", async () => {
       const jsonLd = `<script type="application/ld+json">{"geo": {"latitude": "-31.9505", "longitude": "115.8605"}}</script>`;
-      await gotoFixture(page, PLACE_URL, placeHtml(jsonLd));
+      await gotoFixture(page, PLACE_URL, placeHtml({ head: jsonLd }));
 
       const details = await extractPlaceDetails(page, null, null);
 
@@ -265,13 +297,32 @@ describe("page extractors in a real browser", { timeout: 60_000 }, () => {
       await gotoFixture(
         page,
         PLACE_URL,
-        placeHtml("", `<span class="fCEvvc">Permanently closed</span>`),
+        placeHtml({ status: `<span class="fCEvvc">Permanently closed</span>` }),
       );
 
       const details = await extractPlaceDetails(page, null, null);
 
       expect(details.status).toBe("permanently_closed");
       expect(details.lat).toBeNull();
+    });
+
+    it("parses review counts with thousands separators", async () => {
+      await gotoFixture(page, PLACE_URL, placeHtml({ reviewLabel: "12,345 reviews" }));
+
+      const details = await extractPlaceDetails(page, null, null);
+
+      expect(details.review_count).toBe(12_345);
+    });
+
+    it("ignores review counts that belong to other places on the page", async () => {
+      // Signed-out visitors get no review count in the header, but the page
+      // still lists other places (e.g. a Directory) with their own counts.
+      await gotoFixture(page, PLACE_URL, placeHtml({ reviewLabel: null, directory: true }));
+
+      const details = await extractPlaceDetails(page, null, null);
+
+      expect(details.rating).toBe(4.6);
+      expect(details.review_count).toBeNull();
     });
   });
 });
